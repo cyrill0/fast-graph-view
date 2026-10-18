@@ -306,16 +306,6 @@ export class RawGraph {
     g.revision++;
     return g;
   }
-
-  /** how many files carry each tag id */
-  tagCounts(): Map<number, number> {
-    const counts = new Map<number, number>();
-    for (let i = 0; i < this.tt.length; i++) {
-      const t = this.tt[i];
-      counts.set(t, (counts.get(t) ?? 0) + 1);
-    }
-    return counts;
-  }
 }
 
 function comparePath(a: TFile, b: TFile): number {

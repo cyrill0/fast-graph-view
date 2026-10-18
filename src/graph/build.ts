@@ -393,15 +393,23 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
     );
   }
 
-  // tag / unresolved nodes, most used first so caps trim the rare ones
+  // tag / unresolved nodes, ranked by the files that are actually drawn
   const tagRep = new Int32Array(raw.tagNames.length).fill(-1);
   const overflowCounts: { kind: number; count: number }[] = [];
   if (options.showTags) {
-    const tagCounts = raw.tagCounts();
+    const usage = new Map<number, number>();
+    for (let e = 0; e < raw.ts.length; e++) {
+      if (!active[raw.ts[e]]) continue;
+      const t = raw.tt[e];
+      usage.set(t, (usage.get(t) ?? 0) + 1);
+    }
     const order = raw.tagNames
       .map((_, t) => t)
-      .filter((t) => (tagCounts.get(t) ?? 0) >= options.minTagUses)
-      .sort((a, b) => (tagCounts.get(b) ?? 0) - (tagCounts.get(a) ?? 0));
+      .filter((t) => {
+        const uses = usage.get(t) ?? 0;
+        return uses > 0 && uses >= options.minTagUses;
+      })
+      .sort((a, b) => (usage.get(b) ?? 0) - (usage.get(a) ?? 0));
     const keep = order.slice(0, options.maxNonFileNodes);
     if (order.length > keep.length) overflowCounts.push({ kind: NodeKind.Tag, count: order.length - keep.length });
     for (const t of keep) tagRep[t] = addNode(NodeKind.Tag, -1, -1, -1, raw.tagNames[t], null);
@@ -411,11 +419,13 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
   if (options.showUnresolved) {
     const usage = new Map<number, number>();
     for (let e = 0; e < raw.us.length; e++) {
+      if (!active[raw.us[e]]) continue;
       const t = raw.ut[e];
       usage.set(t, (usage.get(t) ?? 0) + raw.uw[e]);
     }
     const order = raw.unresolvedNames
       .map((_, u) => u)
+      .filter((u) => (usage.get(u) ?? 0) > 0)
       .sort((a, b) => (usage.get(b) ?? 0) - (usage.get(a) ?? 0));
     const keep = order.slice(0, options.maxNonFileNodes);
     if (order.length > keep.length) overflowCounts.push({ kind: NodeKind.Unresolved, count: order.length - keep.length });

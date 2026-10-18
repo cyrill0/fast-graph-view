@@ -38,6 +38,11 @@ const FADE_SNAP = 1 / 255;
 const IDLE_FRAMES_TO_STOP = 60;
 /** Above this many nodes the label pass stops counting. */
 const MAX_LABELS = 700;
+/** Fields that read arrow and +/- keystrokes themselves, so the camera must leave them alone. */
+const TEXTUAL_INPUTS = new Set([
+  "color", "date", "datetime-local", "email", "file", "month", "number", "password", "range",
+  "search", "tel", "text", "time", "url", "week",
+]);
 
 export interface EngineHost {
   /** root element the canvases live in */
@@ -685,7 +690,7 @@ export class GraphEngine {
   };
 
   private onKeyDown = (evt: KeyboardEvent): void => {
-    if (document.activeElement !== document.body) return;
+    if (!this.cameraKeys(document.activeElement)) return;
     const step = evt.shiftKey ? 60 : 20;
     let handled = true;
     switch (evt.key) {
@@ -717,6 +722,16 @@ export class GraphEngine {
       this.wake();
     }
   };
+
+  /** Keys belong to the camera unless a field that consumes them has focus, or focus is outside this view. */
+  private cameraKeys(el: Element | null): boolean {
+    if (el === null || el === document.body) return true;
+    if (!(el instanceof HTMLElement)) return false;
+    const tag = el.tagName;
+    if (tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable) return false;
+    if (tag === "INPUT" && TEXTUAL_INPUTS.has((el as HTMLInputElement).type)) return false;
+    return this.host.stageEl.contains(el);
+  }
 
   private worldX(cssX: number): number {
     return this.camera.screenToWorldX(cssX);
@@ -848,6 +863,10 @@ export class GraphEngine {
   /** Native `renderProgression`: grow the visible set by link count over time. */
   startTimelapse(): boolean {
     if (this.host.isLocal || !this.raw) return false;
+    if (this.progressionTimer !== null) {
+      clearInterval(this.progressionTimer);
+      this.progressionTimer = null;
+    }
     const links = this.model ? this.model.edgeCount : this.raw.edgeCount;
     this.progressionSpeed = Math.min(100, Math.max(5, 0.5 * Math.sqrt(links)));
     this.progressionStartedAt = performance.now();

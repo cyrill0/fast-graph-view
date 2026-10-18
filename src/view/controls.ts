@@ -515,6 +515,8 @@ class ControlSection {
   readonly childrenEl: HTMLElement;
   private readonly iconEl: HTMLElement;
   private readonly onToggle: () => void;
+  private readonly options: GraphOptions;
+  private readonly optionKey: string;
   private collapsed: boolean;
 
   constructor(
@@ -526,6 +528,8 @@ class ControlSection {
     onToggle: () => void,
   ) {
     this.onToggle = onToggle;
+    this.options = options;
+    this.optionKey = `collapse-${key}`;
     this.el = parent.createDiv({ cls: `tree-item graph-control-section mod-${key}` });
     const self = this.el.createDiv({ cls: "tree-item-self is-clickable mod-collapsible" });
     this.iconEl = self.createDiv({ cls: "tree-item-icon collapse-icon" });
@@ -536,7 +540,7 @@ class ControlSection {
     });
     this.childrenEl = this.el.createDiv({ cls: "tree-item-children" });
 
-    this.collapsed = options[`collapse-${key}` as keyof GraphOptions] !== false;
+    this.collapsed = (options as unknown as Record<string, unknown>)[this.optionKey] !== false;
     this.paint();
 
     const toggleFromClick = (evt: MouseEvent): void => {
@@ -548,7 +552,7 @@ class ControlSection {
     self.addEventListener("click", toggleFromClick);
     self.addEventListener("auxclick", toggleFromClick);
 
-    listeners[`collapse-${key}`] = (value?: unknown) => {
+    listeners[this.optionKey] = (value?: unknown) => {
       if (typeof value === "boolean") {
         if (value !== this.collapsed) {
           this.collapsed = value;
@@ -569,6 +573,7 @@ class ControlSection {
   setCollapsed(collapsed: boolean): void {
     if (this.collapsed === collapsed) return;
     this.collapsed = collapsed;
+    (this.options as unknown as Record<string, unknown>)[this.optionKey] = collapsed;
     this.paint();
     this.onToggle();
   }
