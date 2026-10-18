@@ -1,0 +1,134 @@
+/* Only what the core plugin's own rules do not already cover.
+   `.graph-controls`, `.graph-control-section`, `.graph-color-group`, `.tree-item-*`,
+   `.clickable-icon` and `.drag-ghost` all come from app.css unchanged. */
+
+/* The stage: contentEl, with the canvas pair stacked under the panel. */
+.fast-graph-stage > canvas {
+  display: block;
+  position: absolute;
+  left: 0;
+  top: 0;
+}
+
+.fast-graph-stage > .fast-graph-gl {
+  z-index: 0;
+}
+
+.fast-graph-stage > .fast-graph-labels {
+  z-index: 1;
+  pointer-events: none;
+}
+
+.fast-graph-stage .graph-controls {
+  z-index: 3;
+}
+
+/* app.css has no rule for collapsed children at all - native animates inline height. */
+.fast-graph-stage .graph-control-section > .tree-item-children.is-hidden {
+  display: none;
+}
+
+.fast-graph-stage {
+  cursor: default;
+}
+
+.fast-graph-stage.is-grabbing,
+.fast-graph-stage.is-grabbing > canvas {
+  cursor: grabbing;
+}
+
+/* Colour probe: `.graph-view.color-*` elements app.css already styles. */
+.fast-graph-probe {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Folded-folder hover card. */
+.fast-graph-card {
+  position: absolute;
+  z-index: 4;
+  width: 268px;
+  padding: var(--size-4-2) var(--size-4-3);
+  border-radius: var(--menu-radius);
+  border: var(--menu-border-width) solid var(--background-modifier-border);
+  background-color: var(--menu-background);
+  box-shadow: 0 2px 12px var(--background-modifier-box-shadow);
+  font-size: var(--font-ui-smaller);
+  color: var(--text-normal);
+  pointer-events: none;
+}
+
+.fast-graph-card-title {
+  font-weight: var(--font-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fast-graph-card-count {
+  color: var(--text-muted);
+  margin-bottom: var(--size-2-2);
+}
+
+.fast-graph-card-row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+}
+
+.fast-graph-card-label {
+  color: var(--text-muted);
+}
+
+.fast-graph-card-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.fast-graph-card-list {
+  margin-top: var(--size-2-2);
+  border-top: 1px solid var(--background-modifier-border);
+  padding-top: var(--size-2-2);
+}
+
+.fast-graph-card-item {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fast-graph-card-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--size-2-1) var(--size-2-3);
+  margin-top: var(--size-2-2);
+}
+
+.fast-graph-card-tag {
+  color: var(--color-yellow);
+}
+
+.fast-graph-card-hint {
+  margin-top: var(--size-2-2);
+  color: var(--text-faint);
+}
+
+/* Node, edge and frame counts. */
+.fast-graph-status {
+  position: absolute;
+  z-index: 2;
+  inset-inline-start: var(--size-4-3);
+  bottom: var(--size-4-3);
+  padding: var(--size-2-1) var(--size-2-3);
+  border-radius: var(--radius-s);
+  background-color: var(--background-primary);
+  color: var(--text-muted);
+  font-size: var(--font-smaller);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0.75;
+}

@@ -1,0 +1,6 @@
+{
+  "1.0.0": {
+    "minAppVersion": "1.7.0",
+    "notes": "Initial release: WebGL renderer, worker force layout, folder aggregation, built-in graph takeover."
+  }
+}
