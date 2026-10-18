@@ -117,11 +117,11 @@ const RELOAD = `(async () => {
     const orig = console.error.bind(console);
     console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ').slice(0, 200)); orig(...a); };
   }
-  if (app.plugins.getPlugin('fast-graph')) {
-    await app.plugins.disablePlugin('fast-graph');
+  if (app.plugins.getPlugin('fast-graph-view')) {
+    await app.plugins.disablePlugin('fast-graph-view');
     await sleep(500);
   }
-  await app.plugins.enablePlugin('fast-graph');
+  await app.plugins.enablePlugin('fast-graph-view');
   await sleep(700);
   app.workspace.detachLeavesOfType('graph');
   app.workspace.detachLeavesOfType('markdown');

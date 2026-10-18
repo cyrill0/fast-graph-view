@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-fast-graph",
+  "name": "fast-graph-view",
   "version": "1.0.0",
   "private": true,
   "description": "WebGL, worker-simulated drop-in replacement for the Obsidian graph view that aggregates large folders into metadata nodes.",

@@ -52,7 +52,7 @@
   out.probeColors = [...document.querySelectorAll('body > .graph-view')].map((e) => e.className);
 
   // plugin settings snapshot
-  const plugin = app.plugins.getPlugin('fast-graph');
+  const plugin = app.plugins.getPlugin('fast-graph-view');
   out.settings = plugin ? { takeover: plugin.settings.takeover, cluster: plugin.settings.cluster } : null;
   out.globalType = plugin?.globalType;
   out.localType = plugin?.localType;

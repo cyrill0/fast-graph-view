@@ -1,7 +1,7 @@
 (async () => {
   const app = window.app;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const plugin = app.plugins.getPlugin('fast-graph');
+  const plugin = app.plugins.getPlugin('fast-graph-view');
   const origRaf = window.requestAnimationFrame.bind(window);
 
   // The compositor is not producing frames for this window right now, so drive

@@ -5,7 +5,7 @@
 
   app.workspace.detachLeavesOfType('graph');
   await sleep(300);
-  await app.plugins.disablePlugin('fast-graph');
+  await app.plugins.disablePlugin('fast-graph-view');
   await sleep(600);
 
   const core = app.internalPlugins.getPluginById('graph').instance;

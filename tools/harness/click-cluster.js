@@ -1,7 +1,7 @@
 (async () => {
   const app = window.app;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  if (!app.plugins.getPlugin('fast-graph')) { await app.plugins.enablePlugin('fast-graph'); await sleep(900); }
+  if (!app.plugins.getPlugin('fast-graph-view')) { await app.plugins.enablePlugin('fast-graph-view'); await sleep(900); }
   app.workspace.detachLeavesOfType('graph');
   await sleep(400);
   app.commands.executeCommandById('graph:open');

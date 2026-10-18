@@ -9,7 +9,7 @@
  *    source, the leaf states already in `workspace.json` - then lands here
  *    without a single duplicate surface, and `.obsidian/graph.json` stays the
  *    store the core plugin writes to.
- *  - **standalone** registers `fast-graph` / `fast-localgraph` next to the
+ *  - **standalone** registers `fast-graph-view` / `fast-localgraph` next to the
  *    native views so both can be compared side by side.
  *
  *  `viewRegistry.registerView` throws on an existing type, so takeover has to
@@ -49,9 +49,9 @@ import {
   type PluginData,
 } from "./settings";
 
-export const STANDALONE_GRAPH_TYPE = "fast-graph";
+export const STANDALONE_GRAPH_TYPE = "fast-graph-view";
 export const STANDALONE_LOCAL_TYPE = "fast-localgraph";
-const HOVER_SOURCE_STANDALONE = "fast-graph";
+const HOVER_SOURCE_STANDALONE = "fast-graph-view";
 const EMPTY_VIEW_TYPE = "empty";
 
 /** The core `graph` internal plugin, as far as we care about it. */

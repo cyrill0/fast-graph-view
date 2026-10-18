@@ -21,7 +21,7 @@
 
   app.workspace.detachLeavesOfType('graph');
   await sleep(400);
-  await app.plugins.disablePlugin('fast-graph');
+  await app.plugins.disablePlugin('fast-graph-view');
   await sleep(600);
 
   const t0 = performance.now();

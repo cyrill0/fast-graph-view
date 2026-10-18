@@ -15,7 +15,7 @@ pnpm build          # esbuild production bundle + tsc --noEmit
 ```
 
 The plugin is the three files at the repository root: `main.js`, `styles.css`,
-`manifest.json`. Copy them to `<vault>/.obsidian/plugins/fast-graph/` and enable
+`manifest.json`. Copy them to `<vault>/.obsidian/plugins/fast-graph-view/` and enable
 "Fast Graph View" in Settings → Community plugins. `pnpm watch` rebuilds on change.
 
 ## Why it is fast

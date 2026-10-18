@@ -67,7 +67,7 @@ const STATE = `JSON.stringify((function () {
     backlinks: o?.localBacklinks ?? null,
     forelinks: o?.localForelinks ?? null,
     interlinks: o?.localInterlinks ?? null,
-    hoverSource: window.app.plugins.getPlugin('fast-graph')?.hoverSource ?? null,
+    hoverSource: window.app.plugins.getPlugin('fast-graph-view')?.hoverSource ?? null,
     nodes: m?.nodeCount ?? null, edges: m?.edgeCount ?? null,
     counts: { files, clusters, tags, unresolved, attachments },
     status: view?.contentEl?.querySelector('.fast-graph-status')?.textContent ?? null,

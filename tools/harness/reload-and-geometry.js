@@ -1,10 +1,10 @@
 (async () => {
   const app = window.app;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  const plugin = app.plugins.getPlugin('fast-graph');
+  const plugin = app.plugins.getPlugin('fast-graph-view');
   const beforeLeaves = app.workspace.getLeavesOfType('graph').length;
 
-  await app.plugins.disablePlugin('fast-graph');
+  await app.plugins.disablePlugin('fast-graph-view');
   await sleep(400);
   const afterDisable = {
     creators: Object.keys(app.viewRegistry.viewByType).filter((t) => /graph/.test(t)),
@@ -12,9 +12,9 @@
     leaves: app.workspace.getLeavesOfType('graph').length,
     leafView: app.workspace.getLeavesOfType('graph')[0]?.view?.getViewType() ?? null,
     stageClass: app.workspace.getLeavesOfType('graph')[0]?.view?.contentEl?.className ?? null,
-    ourCss: !!document.querySelector('style[data-plugin="fast-graph"]'),
+    ourCss: !!document.querySelector('style[data-plugin="fast-graph-view"]'),
   };
-  await app.plugins.enablePlugin('fast-graph');
+  await app.plugins.enablePlugin('fast-graph-view');
   await sleep(400);
 
   app.commands.executeCommandById('graph:open');
