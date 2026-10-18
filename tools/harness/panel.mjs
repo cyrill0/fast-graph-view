@@ -17,6 +17,13 @@ const FRAME_SOURCE = `(async () => {
 })()`;
 
 const CONTEXT = `(() => {
+  if (!window.__errs) {
+    window.__errs = [];
+    addEventListener('error', (ev) => window.__errs.push('error: ' + ev.message + ' @' + ev.filename + ':' + ev.lineno));
+    addEventListener('unhandledrejection', (ev) => window.__errs.push('reject: ' + String(ev.reason).slice(0, 200)));
+    const orig = console.error.bind(console);
+    console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ').slice(0, 200)); orig(...a); };
+  }
   const app = window.app;
   const leaf = () => app.workspace.getLeavesOfType('graph')[0] ?? null;
   window.__p = {
@@ -88,7 +95,7 @@ const SNAPSHOT = `JSON.stringify((function () {
   };
 })())`;
 
-export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
+export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, raise }) {
   const out = {};
   const step = async (name, fn) => {
     try {
@@ -103,6 +110,52 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
   const json = (s) => (s ? JSON.parse(s) : null);
   const snapshot = () => evalJs(SNAPSHOT).then(json);
   const waitIdle = (budget = 30000) => evalJs(`window.__pWait(${budget})`).then(json);
+  const starved = (r) => !!r && (r.frames ?? 0) * 100 < (r.waited ?? 0);
+
+  /**
+   * The compositor for an occluded Electron window stops producing BeginFrames while
+   * `visibilityState` stays `visible`, so rAF - and with it the layout loop - freezes.
+   * Waking the saver, raising the page and capturing one screenshot (which forces a frame)
+   * unfreezes it often enough that a starved wait is worth retrying instead of trusting.
+   */
+  const nudge = async () => {
+    await wake();
+    await raise();
+    await shot('/tmp/shots/nudge.png');
+    await sleep(600);
+  };
+  const settle = async (budget = 45000, retries = 3) => {
+    const r = await waitIdle(budget);
+    if (starved(r) && retries > 0) {
+      await nudge();
+      const again = await settle(budget, retries - 1);
+      return { ...again, nudges: 1 + (r.nudges ?? 0) };
+    }
+    return { ...r, starved: starved(r) };
+  };
+
+  /** Whether a control section's body is actually laid out (a collapsed body is display:none). */
+  const sectionState = async (key) =>
+    json(
+      await evalJs(`(function () {
+        const s = document.querySelector('.graph-controls .mod-${key}');
+        if (!s) return null;
+        return JSON.stringify({
+          collapsed: s.hasClass('is-collapsed'),
+          bodyHeight: Math.round(s.querySelector('.tree-item-children').getBoundingClientRect().height),
+        });
+      })()`),
+    );
+
+  /** Open a section so its rows have real rects; a user cannot click a hidden control either. */
+  const ensureOpen = async (key) => {
+    for (let i = 0; i < 3; i++) {
+      const st = await sectionState(key);
+      if (st && st.bodyHeight > 10) return st;
+      await clickSel(`.graph-controls .mod-${key} .tree-item-self`, 400);
+    }
+    return await sectionState(key);
+  };
 
   /** centre of a plain element, by selector */
   const rect = async (selector) =>
@@ -111,6 +164,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
         const el = document.querySelector(${JSON.stringify(selector)});
         if (!el) return null;
         const b = el.getBoundingClientRect();
+        if (b.width < 4 || b.height < 4) return JSON.stringify({ hidden: true, w: Math.round(b.width), h: Math.round(b.height) });
         return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height) });
       })()`),
     );
@@ -128,21 +182,26 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
         )});
         if (!el) return null;
         const b = el.getBoundingClientRect();
-        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), label: rows[0].querySelector('.setting-item-name').textContent, rows: rows.length });
+        // a hidden row reports a 0x0 rect at the page origin; that is not a clickable target
+        if (b.width < 4 || b.height < 4) {
+          return JSON.stringify({ hidden: true, label: rows[0].querySelector('.setting-item-name').textContent, w: Math.round(b.width), h: Math.round(b.height) });
+        }
+        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), label: rows[0].querySelector('.setting-item-name').textContent, rows: rows.length, hidden: false });
       })()`),
     );
 
   const clickAt = async (at, waitMs = 700) => {
     if (!at) return { skipped: 'element not found' };
+    if (at.hidden) return { skipped: `row "${at.label}" is hidden (rect ${at.w}x${at.h})` };
     await mouse('move', at.x, at.y, { waitMs: 120 });
     await mouse('click', at.x, at.y, { waitMs });
-    return { x: at.x, y: at.y, label: at.label };
+    return { x: at.x, y: at.y, w: at.w, h: at.h, label: at.label };
   };
   const clickSel = async (selector, waitMs = 700) => clickAt(await rect(selector), waitMs);
 
   await step('frameSource', () => evalJs(FRAME_SOURCE));
   await step('context', () => evalJs(`${CONTEXT}; 1`));
-  await step('beforeIdle', () => waitIdle(60000));
+  await step('beforeIdle', () => settle(60000));
   out.baseline = await step('optionsBefore', () => snapshot());
 
   await step('panelChrome', () =>
@@ -178,55 +237,87 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
       if (at?.skipped) return at;
       const read = () =>
         evalJs(`JSON.stringify({ icon: document.querySelector('.graph-controls .mod-${s} .collapse-icon').hasClass('is-collapsed'), option: window.__p.options()['${collapseKey[s]}'], bodyHeight: Math.round(document.querySelector('.graph-controls .mod-${s} .tree-item-children').getBoundingClientRect().height) })`).then(json);
+      // the store the core plugin owns, because that is where a collapse flag has to land
+      const stored = async () =>
+        json(await evalJs(`(function () {
+          const key = ${JSON.stringify(collapseKey[s])};
+          const core = window.app.plugins.plugins.graph;
+          return JSON.stringify({ live: core?.options?.[key] ?? null, file: core?.data?.graph?.[key] ?? null });
+        })()`));
       const after = await read();
+      const storedAfter = await stored();
       const at2 = await clickSel(sel, 500);
-      return { at, after, restored: await read(), at2 };
+      const restored = await read();
+      await sleep(600);
+      return { at, after, storedAfter, restored, storedRestored: await stored(), at2 };
     });
   }
 
   // filter toggles rebuild the model, so node counts must follow the option
+  await step('openFilter', () => ensureOpen('filter'));
+  const switchState = async (label) =>
+    json(
+      await evalJs(`(function () {
+        const row = [...window.__p.panel().querySelectorAll('.setting-item')].find((r) =>
+          (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase().includes(${JSON.stringify(label.toLowerCase())}));
+        const box = row?.querySelector('.checkbox-container');
+        return JSON.stringify({ name: row?.querySelector('.setting-item-name')?.textContent ?? null, enabled: box ? box.hasClass('is-enabled') : null, input: box?.querySelector('input')?.checked ?? null });
+      })()`),
+    );
   for (const [label, keyName] of [['tags', 'showTags'], ['attachments', 'showAttachments'], ['orphans', 'showOrphans']]) {
     await step(`toggle_${keyName}`, async () => {
       const at = await named('toggle', label);
       if (!at) return { skipped: `no toggle matching "${label}"` };
+      if (at.hidden) return { skipped: `toggle "${label}" hidden in a collapsed section`, at };
       const v0 = await evalJs(`window.__p.options().${keyName}`);
+      const d0 = await switchState(label);
       const n0 = await snapshot();
-      await clickAt(at, 900);
+      const click = await clickAt(at, 900);
       const v1 = await evalJs(`window.__p.options().${keyName}`);
-      const settled = await waitIdle(45000);
+      const d1 = await switchState(label);
+      const settled = await settle(45000);
       const n1 = await snapshot();
-      await clickAt(at, 900);
+      const at2 = await named('toggle', label);
+      await clickAt(at2, 900);
       const v2 = await evalJs(`window.__p.options().${keyName}`);
-      await waitIdle(45000);
+      const restored = await settle(45000);
       return {
         label: at.label,
         rows: at.rows,
+        click,
         before: v0,
+        domBefore: d0,
         after: v1,
+        domAfter: d1,
         restored: v2,
         nodesBefore: n0.nodes,
         nodesAfter: n1.nodes,
         delta: { files: n1.files - n0.files, tags: n1.tags - n0.tags, attachments: n1.attachments - n0.attachments, unresolved: n1.unresolved - n0.unresolved, clusters: n1.clusters - n0.clusters },
         settled,
+        restoredSettle: restored,
       };
     });
   }
 
   // search: real typing into the panel field, Enter commits
   await step('search', async () => {
+    await ensureOpen('filter');
     const at = await named('input', '');
     if (!at) return { skipped: 'no search input' };
+    if (at.hidden) return { skipped: 'search input hidden', at };
     await clickAt(at, 300);
     await type('path:ETH');
     const typed = await evalJs(`window.__p.options().search`);
     await key('Enter', { waitMs: 1000 });
-    const settled = await waitIdle(45000);
+    const settled = await settle(45000);
     const filtered = await snapshot();
     const status = await evalJs(`window.__p.view().contentEl.querySelector('.fast-graph-status')?.textContent ?? null`);
     await shot('/tmp/shots/panel-search.png');
-    const cleared = await clickSel('.graph-controls .mod-filter .input-clear-button', 500);
+    const clearSel = '.graph-controls .mod-filter .search-input-container .search-input-clear-button';
+    const clearVisible = await evalJs(`(function () { const el = document.querySelector(${JSON.stringify(clearSel)}); if (!el) return null; const b = el.getBoundingClientRect(); return JSON.stringify({ w: Math.round(b.width), h: Math.round(b.height) }); })()`);
+    const cleared = await clickSel(clearSel, 500);
     await key('Enter', { waitMs: 900 });
-    await waitIdle(45000);
+    const restoredSettle = await settle(45000);
     const restored = await snapshot();
     return {
       label: at.label,
@@ -237,45 +328,57 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
       cleared,
       restoredSearch: restored.search,
       restoredNodes: restored.nodes,
+      restoredSettle,
     };
   });
 
   // colour groups: add two by button, type queries, then reorder by dragging a row
   await step('addGroups', async () => {
-    await clickSel('.graph-controls .graph-color-button-container .clickable-icon', 700);
+    const open = await ensureOpen('color-groups');
+    await clickSel('.graph-controls .graph-color-button-container button', 700);
     const rows1 = await evalJs(`document.querySelectorAll('.graph-controls .graph-color-group').length`);
-    await clickSel('.graph-controls .graph-color-button-container .clickable-icon', 700);
+    await clickSel('.graph-controls .graph-color-button-container button', 700);
     const rows2 = await evalJs(`document.querySelectorAll('.graph-controls .graph-color-group').length`);
     const first = await rect('.graph-controls .graph-color-group:nth-child(1) input');
     const second = await rect('.graph-controls .graph-color-group:nth-child(2) input');
-    if (!first || !second) return { rows1, rows2, skipped: 'group row inputs not found' };
-    await clickAt(first, 250);
+    if (!first || !second) return { open, rows1, rows2, skipped: 'group row inputs not found' };
+    const c1 = await clickAt(first, 250);
     await type('path:ETH');
     await key('Enter', { waitMs: 700 });
-    await clickAt(second, 250);
+    const c2 = await clickAt(second, 250);
     await type('is:tag');
     await key('Enter', { waitMs: 700 });
     const groups = evalJs(`JSON.stringify(window.__p.options().colorGroups.map((g) => ({ query: g.query, rgb: g.color.rgb })))`).then(json);
-    const settled = await waitIdle(45000);
-    const coloured = await evalJs(`(function () { const e = window.__p.engine(); const keys = Object.keys(e).filter((k) => /col|hue|tint/i.test(k)); return JSON.stringify({ keys, coloredNodes: e.colored ? e.colored.length ?? e.colored : null }); })()`).then(json);
-    return { rows1, rows2, groups: await groups, settled, coloured };
+    const settled = await settle(45000);
+    const coloured = await evalJs(`JSON.stringify((function () {
+      const m = window.__p.engine().model;
+      let grouped = 0, byGroup = {};
+      for (let i = 0; i < m.nodeCount; i++) { const g = m.group[i]; if (g >= 0) { grouped++; byGroup[g] = (byGroup[g] ?? 0) + 1; } }
+      return { grouped, byGroup, nodes: m.nodeCount };
+    })())`);
+    return { open, rows1, rows2, clicks: [c1, c2], groups: await groups, settled, coloured };
   });
 
   await step('dragGroupRow', async () => {
-    const row = await rect('.graph-controls .graph-color-group:nth-child(1)');
-    const to = await rect('.graph-controls .graph-color-group:nth-child(2)');
-    if (!row || !to) return { skipped: 'need two rows' };
+    const row = await rect('.graph-controls .graph-color-group:nth-child(1) input[type=color]');
+    const to = await rect('.graph-controls .graph-color-group:nth-child(2) input[type=color]');
+    if (!row || !to) return { skipped: 'need two swatches' };
+    if (row.hidden || to.hidden) return { skipped: 'swatches hidden (collapsed section)', row, to };
     const order0 = evalJs(`JSON.stringify(window.__p.options().colorGroups.map((g) => g.query))`).then(json);
-    // the row is dragged by its name field, like the native group list
-    const grab = { x: row.x - 60, y: row.y };
+    // the colour swatch is the native drag handle; the row body is a text input
+    const grab = { x: row.x, y: row.y };
     await mouse('down', grab.x, grab.y, { waitMs: 150 });
-    const during = await evalJs(`JSON.stringify({ body: document.body.hasClass('is-grabbing'), ghosts: document.querySelectorAll('.drag-ghost').length, rowGrabbing: document.querySelectorAll('.graph-color-group.is-grabbing').length })`).then(json);
-    for (let i = 1; i <= 6; i++) await mouse('move', grab.x + i * 12, grab.y + i * 14, { held: 'left', waitMs: 40 });
-    await mouse('up', to.x - 60, to.y, { waitMs: 800 });
+    const during = await evalJs(`JSON.stringify({ body: document.body.hasClass('is-grabbing'), ghosts: document.querySelectorAll('.drag-ghost').length, sectionGrabbing: document.querySelectorAll('.graph-control-section .tree-item-children.is-grabbing').length })`).then(json);
+    for (let i = 1; i <= 6; i++) await mouse('move', grab.x + i * 4, grab.y + i * 14, { held: 'left', waitMs: 40 });
+    const midDrag = await evalJs(`JSON.stringify({ body: document.body.hasClass('is-grabbing'), ghosts: document.querySelectorAll('.drag-ghost').length })`).then(json);
+    await mouse('up', to.x, to.y, { waitMs: 800 });
     const order1 = evalJs(`JSON.stringify(window.__p.options().colorGroups.map((g) => g.query))`).then(json);
     return {
       grab,
+      rowRect: row,
+      targetRect: to,
       during,
+      midDrag,
       bodyGrabbingAfter: await evalJs(`document.body.hasClass('is-grabbing')`),
       ghostsAfter: await evalJs(`document.querySelectorAll('.drag-ghost').length`),
       orderBefore: await order0,
@@ -288,7 +391,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
     let clicks = 0;
     while (n > 0 && clicks < 6) {
       const at = await rect('.graph-controls .graph-color-group:nth-child(1) .clickable-icon');
-      if (!at) break;
+      if (!at || at.hidden) break;
       await clickAt(at, 500);
       clicks++;
       n = await evalJs(`document.querySelectorAll('.graph-controls .graph-color-group').length`);
@@ -298,39 +401,147 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep }) {
 
   // sliders: arrow keys on a focused range input are the native keyboard interaction
   await step('sliderKeys', async () => {
+    const open = await ensureOpen('display');
     const at = await named('slider', 'node size');
-    if (!at) return { skipped: 'no node size slider' };
+    if (!at) return { open, skipped: 'no node size slider' };
+    if (at.hidden) return { open, skipped: `slider "${at.label}" hidden`, at };
     const v0 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     await clickAt(at, 300);
     for (let i = 0; i < 5; i++) await key('ArrowRight', { waitMs: 120 });
     const v1 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
-    const domValue = await evalJs(`(function () { const el = document.querySelector('.graph-controls .mod-display input[type=range]'); return el ? Number(el.value) : null; })()`);
-    await clickAt(at, 200);
+    // read the row that was driven, not the first slider in the section
+    const domValue = await evalJs(`(function () {
+      const rows = [...document.querySelectorAll('.graph-controls .mod-display .setting-item')].filter((r) => (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase().includes('node size'));
+      const el = rows[0]?.querySelector('input[type=range]');
+      return el ? Number(el.value) : null;
+    })()`);
+    const focused = await evalJs(`document.activeElement?.className ?? null`);
+    await clickAt(await named('slider', 'node size'), 200);
     for (let i = 0; i < 5; i++) await key('ArrowLeft', { waitMs: 120 });
     const v2 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
-    return { label: at.label, before: v0, afterRight: v1, domValue, afterLeft: v2 };
+    return { open, label: at.label, at, before: v0, afterRight: v1, domValue, activeEl: focused, afterLeft: v2 };
   });
 
-  // timelapse: the animate button starts it, Escape stops it
+  // Timelapse. The native `renderProgression` has no stop path, so the stop below is the engine
+  // API rather than a user control, and every sample is timer-driven because the reveal grows on
+  // a setInterval and not on a frame.
+  const SHAPE = `JSON.stringify((function () {
+    const e = window.__p.engine(), m = e.model;
+    let files = 0, tags = 0, unres = 0, clusters = 0, iso = 0;
+    for (let i = 0; i < m.nodeCount; i++) {
+      const k = m.kind[i];
+      if (k === 0) files++; else if (k === 2) tags++; else if (k === 3) unres++; else if (k === 4) clusters++;
+      if (m.degree[i] === 0) iso++;
+    }
+    return { nodes: m.nodeCount, edges: m.edgeCount, files, tags, unresolved: unres, clusters,
+             isolated: iso, limit: e.progressionLimit ?? null, timelapsing: !!e.timelapsing, overflow: m.overflow };
+  })())`;
+
   await step('timelapse', async () => {
-    const at = await clickSel('.graph-controls .mod-animate', 1200);
+    const before = await evalJs(SHAPE).then(json);
+    await ensureOpen('display');
+    const at = await clickSel('.graph-controls .mod-display .setting-item button', 300);
     if (at?.skipped) return at;
-    const started = evalJs(`JSON.stringify({ timelapsing: window.__p.engine().timelapsing, nodes: window.__p.engine().model.nodeCount, status: window.__p.view().contentEl.querySelector('.fast-graph-status')?.textContent ?? null })`).then(json);
-    await sleep(4000);
-    const later = evalJs(`JSON.stringify({ timelapsing: window.__p.engine().timelapsing, nodes: window.__p.engine().model.nodeCount, alpha: Math.round(window.__p.engine().alpha * 1000) / 1000 })`).then(json);
-    await key('Escape', { waitMs: 800 });
-    const stopped = evalJs(`JSON.stringify({ timelapsing: window.__p.engine().timelapsing, nodes: window.__p.engine().model.nodeCount })`).then(json);
-    await waitIdle(45000);
-    return { at, started: await started, later: await later, afterEscape: await stopped };
+    const t0 = Date.now();
+    const frames = [];
+    for (const mark of [300, 2000, 5000]) {
+      await sleep(Math.max(0, mark - (Date.now() - t0)));
+      frames.push({ atMs: mark, ...(await evalJs(SHAPE).then(json)) });
+    }
+
+    // Escape is not a stop control in either implementation; measure it instead of assuming it
+    await key('Escape', { waitMs: 600 });
+    const afterEscape = await evalJs(SHAPE).then(json);
+
+    // a second click restarts rather than stacking another interval
+    const restartAt = await clickSel('.graph-controls .mod-display .setting-item button', 1500);
+    const restarted = await evalJs(SHAPE).then(json);
+
+    const stopped = await evalJs(`(window.__p.engine().stopTimelapse(), ${SHAPE})`).then(json);
+    await sleep(1500);
+    const stopA = await evalJs(SHAPE).then(json);
+    await sleep(2500);
+    const stopB = await evalJs(SHAPE).then(json);
+
+    // and the same control through the header wand, which app.css only shows while the panel is closed
+    await clickSel('.graph-controls .mod-close', 500);
+    const wandAt = await clickSel('.graph-controls .mod-animate', 1500);
+    const wand = await evalJs(SHAPE).then(json);
+    await evalJs(`(window.__p.engine().stopTimelapse(), 1)`);
+    await sleep(1500);
+    const wandStopped = await evalJs(SHAPE).then(json);
+    await clickSel('.graph-controls .mod-open', 400);
+    const settled = await settle(60000);
+
+    const last = frames[frames.length - 1] ?? {};
+    return {
+      at, before, frames,
+      grew: last.nodes > (frames[0]?.nodes ?? 0) && last.edges > (frames[0]?.edges ?? 0),
+      escapeStops: !(afterEscape.timelapsing ?? true),
+      afterEscape,
+      restartAt, restarted,
+      stopped, afterStop1500: stopA, afterStop4000: stopB,
+      advancedAfterStop: stopB.nodes !== stopA.nodes || stopB.limit !== stopA.limit,
+      wandAt, wand, wandStopped, settled,
+    };
+  });
+
+  // Keyboard camera control: focus on a panel switch must not strand the keys, and a field
+  // that reads the same keys must keep them.
+  await step('cameraKeys', async () => {
+    const CAM = `JSON.stringify((function () {
+      const c = window.__p.engine().camera, a = document.activeElement;
+      return { panX: Math.round(c.panX), panY: Math.round(c.panY), zoom: Math.round(c.targetZoom * 1000) / 1000,
+               active: a ? a.tagName + (a.type ? ':' + a.type : '') : null };
+    })())`;
+    await ensureOpen('filter');
+    const base = await evalJs(CAM).then(json);
+
+    const at = await named('toggle', 'orphans');
+    if (!at || at.hidden) return { skipped: 'orphans switch not reachable', at };
+    await clickAt(at, 500);
+    const onSwitch = await evalJs(CAM).then(json);
+    await key('ArrowLeft', { waitMs: 200 });
+    await key('ArrowUp', { waitMs: 200 });
+    await key('Equal', { waitMs: 200 });
+    const afterSwitch = await evalJs(CAM).then(json);
+
+    const search = await rect('.graph-controls .mod-filter .search-input-container input');
+    await clickAt(search, 300);
+    const onField = await evalJs(CAM).then(json);
+    await key('ArrowLeft', { waitMs: 200 });
+    await key('ArrowUp', { waitMs: 200 });
+    await key('Equal', { waitMs: 200 });
+    const afterField = await evalJs(CAM).then(json);
+
+    await clickAt(await named('toggle', 'orphans'), 900);
+    const restored = await settle(45000);
+    return {
+      base, onSwitch, afterSwitch,
+      switchPanned: afterSwitch.panX !== onSwitch.panX && afterSwitch.panY !== onSwitch.panY,
+      switchZoomed: afterSwitch.zoom > onSwitch.zoom,
+      onField, afterField,
+      fieldKeptKeys:
+        afterField.panX === afterSwitch.panX && afterField.panY === afterSwitch.panY && afterField.zoom === afterSwitch.zoom,
+      restored,
+    };
   });
 
   await step('restoreDefaults', async () => {
     const at = await clickSel('.graph-controls .mod-reset', 1200);
-    const settled = await waitIdle(60000);
+    const settled = await settle(60000);
     return { at, settled, after: await snapshot() };
   });
 
   await step('errors', () => evalJs(`(window.__errs ?? []).slice(-8)`));
   await step('status', () => evalJs(`window.__p.view().contentEl.querySelector('.fast-graph-status')?.textContent ?? null`));
+  await step('finalCadence', () =>
+    evalJs(`(async () => {
+      const t0 = performance.now();
+      let n = 0;
+      await new Promise((r) => { setTimeout(r, 2000); requestAnimationFrame(function loop() { n++; if (performance.now() - t0 < 2000) requestAnimationFrame(loop); else r(); }); });
+      return JSON.stringify({ frames: n, ms: Math.round(performance.now() - t0), fps: Math.round((n / (performance.now() - t0)) * 1000 * 10) / 10, vis: document.visibilityState, focus: document.hasFocus() });
+    })()`).then(json),
+  );
   return out;
 }

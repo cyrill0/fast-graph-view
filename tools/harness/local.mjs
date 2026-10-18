@@ -17,6 +17,13 @@ const FRAME_SOURCE = `(async () => {
 })()`;
 
 const CONTEXT = `(() => {
+  if (!window.__errs) {
+    window.__errs = [];
+    addEventListener('error', (ev) => window.__errs.push('error: ' + ev.message + ' @' + ev.filename + ':' + ev.lineno));
+    addEventListener('unhandledrejection', (ev) => window.__errs.push('reject: ' + String(ev.reason).slice(0, 200)));
+    const orig = console.error.bind(console);
+    console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ').slice(0, 200)); orig(...a); };
+  }
   const app = window.app;
   const leaves = () => app.workspace.getLeavesOfType('localgraph');
   window.__l = {
@@ -74,7 +81,7 @@ const STATE = `JSON.stringify((function () {
   };
 })())`;
 
-export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
+export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, raise }) {
   const out = {};
   const step = async (name, fn) => {
     try {
@@ -88,6 +95,57 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
   };
   const json = (s) => (s ? JSON.parse(s) : null);
   const waitIdle = (b = 30000) => evalJs(`window.__lWait(${b})`).then(json);
+  const starved = (r) => !!r && (r.frames ?? 0) * 100 < (r.waited ?? 0);
+
+  /** An occluded Electron window stops producing BeginFrames while still reporting `visible`. */
+  const nudge = async () => {
+    await wake();
+    await raise();
+    await shot('/tmp/shots/local-nudge.png');
+    await sleep(600);
+  };
+  const settle = async (budget = 30000, retries = 3) => {
+    const r = await waitIdle(budget);
+    if (starved(r) && retries > 0) {
+      await nudge();
+      const again = await settle(budget, retries - 1);
+      return { ...again, nudges: 1 + (r.nudges ?? 0) };
+    }
+    return { ...r, starved: starved(r) };
+  };
+  const cadence = (ms = 1500) =>
+    evalJs(`(async () => {
+      const t0 = performance.now();
+      let n = 0;
+      await new Promise((r) => { setTimeout(r, ${ms}); requestAnimationFrame(function loop() { n++; if (performance.now() - t0 < ${ms}) requestAnimationFrame(loop); else r(); }); });
+      return JSON.stringify({ frames: n, ms: Math.round(performance.now() - t0), fps: Math.round((n / (performance.now() - t0)) * 1000 * 10) / 10, vis: document.visibilityState, focus: document.hasFocus() });
+    })()`).then(json);
+
+  /** Open a control section so its rows have real rects; collapsed bodies are display:none. */
+  const ensureOpen = async (key) => {
+    for (let i = 0; i < 3; i++) {
+      const st = json(
+        await evalJs(`(function () {
+          const s = window.__l.view()?.contentEl.querySelector('.graph-controls .mod-${key}');
+          if (!s) return null;
+          return JSON.stringify({ collapsed: s.hasClass('is-collapsed'), bodyHeight: Math.round(s.querySelector('.tree-item-children').getBoundingClientRect().height) });
+        })()`),
+      );
+      if (st && st.bodyHeight > 10) return st;
+      const at = json(
+        await evalJs(`(function () {
+          const el = window.__l.view()?.contentEl.querySelector('.graph-controls .mod-${key} .tree-item-self');
+          if (!el) return null;
+          const b = el.getBoundingClientRect();
+          return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2) });
+        })()`),
+      );
+      if (!at) return { skipped: 'section not found' };
+      await mouse('move', at.x, at.y, { waitMs: 100 });
+      await mouse('click', at.x, at.y, { waitMs: 400 });
+    }
+    return json(await evalJs(`JSON.stringify({ bodyHeight: Math.round(window.__l.view().contentEl.querySelector('.graph-controls .mod-${key} .tree-item-children').getBoundingClientRect().height) })`));
+  };
 
   await step('frameSource', () => evalJs(FRAME_SOURCE));
   await step('context', () => evalJs(`${CONTEXT}; 1`));
@@ -127,7 +185,7 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
     }
     return { commandReturned: ran, state: json(await evalJs(STATE)) };
   });
-  await step('localIdle', () => waitIdle(45000));
+  await step('localIdle', () => settle(45000));
   await step('shotLocal', () => shot('/tmp/shots/local-graph.png'));
 
   // the root follows the active note while the leaf is unpinned
@@ -136,12 +194,12 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
     await evalJs(`window.app.workspace.openLinkText(${JSON.stringify(picked.big)}, '', false)`);
     await sleep(1500);
     const st = json(await evalJs(STATE));
-    await waitIdle(30000);
+    await settle(30000);
     const moved = st.root !== root0;
     // back to the deep note for the rest of the run
     await evalJs(`window.app.workspace.openLinkText(${JSON.stringify(picked.deep ?? picked.big)}, '', false)`);
     await sleep(1500);
-    await waitIdle(30000);
+    await settle(30000);
     return { root0, afterSwitch: st.root, followed: moved, activeNow: json(await evalJs(STATE)).root ?? null };
   });
 
@@ -158,30 +216,79 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
     return { pinned: await evalJs(`!!window.__l.leaf()?.pinned`), rootWhilePinned: [root0, root1], afterUnpin: root2 };
   });
 
-  // link direction options reshape the neighbourhood
-  for (const keyName of ['localBacklinks', 'localForelinks', 'localInterlinks']) {
+  // link direction options reshape the neighbourhood - driven through the real switches
+  const switchAt = async (label) =>
+    json(
+      await evalJs(`(function () {
+        const panel = window.__l.view().contentEl.querySelector('.graph-controls');
+        if (!panel || panel.hasClass('is-close')) return null;
+        const row = [...panel.querySelectorAll('.setting-item')].find((r) =>
+          (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase() === ${JSON.stringify(label.toLowerCase())});
+        const el = row?.querySelector('.checkbox-container');
+        if (!el) return null;
+        const b = el.getBoundingClientRect();
+        if (b.width < 4 || b.height < 4) return JSON.stringify({ hidden: true, w: Math.round(b.width), h: Math.round(b.height) });
+        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), enabled: el.hasClass('is-enabled') });
+      })()`),
+    );
+  const domEnabled = async (label) =>
+    evalJs(`(function () {
+      const panel = window.__l.view().contentEl.querySelector('.graph-controls');
+      const row = [...panel.querySelectorAll('.setting-item')].find((r) =>
+        (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase() === ${JSON.stringify(label.toLowerCase())});
+      return row?.querySelector('.checkbox-container')?.hasClass('is-enabled') ?? null;
+    })()`);
+  const directionLabels = { localBacklinks: 'Incoming links', localForelinks: 'Outgoing links', localInterlinks: 'Neighbor links' };
+  await step('openLocalFilter', () => ensureOpen('filter'));
+  for (const keyName of Object.keys(directionLabels)) {
+    const label = directionLabels[keyName];
     await step(`option_${keyName}`, async () => {
       const v0 = await evalJs(`window.__l.options().${keyName}`);
       const n0 = await evalJs(`window.__l.engine().model.nodeCount`);
-      await evalJs(`(function () {
-        const o = window.__l.options();
-        o.${keyName} = !o.${keyName};
-        window.__l.view().presenter.onOptionsChange();
-      })()`);
-      await waitIdle(30000);
+      const at = await switchAt(label);
+      let via = 'trusted click';
+      if (!at) {
+        via = 'programmatic (row not found)';
+        await evalJs(`(function () { const o = window.__l.options(); o.${keyName} = !o.${keyName}; window.__l.view().presenter.onOptionsChange(); })()`);
+      } else if (at.hidden) {
+        return { label, skipped: `switch hidden (rect ${at.w}x${at.h})` };
+      } else {
+        await mouse('move', at.x, at.y, { waitMs: 120 });
+        await mouse('click', at.x, at.y, { waitMs: 500 });
+      }
+      const v1 = await evalJs(`window.__l.options().${keyName}`);
+      const d1 = await domEnabled(label);
+      const settled = await settle(30000);
       const n1 = await evalJs(`window.__l.engine().model.nodeCount`);
-      await evalJs(`(function () {
-        const o = window.__l.options();
-        o.${keyName} = !o.${keyName};
-        window.__l.view().presenter.onOptionsChange();
-      })()`);
-      await waitIdle(30000);
-      return { before: v0, nodesBefore: n0, nodesAfter: n1, restored: await evalJs(`window.__l.options().${keyName}`), nodesRestored: await evalJs(`window.__l.engine().model.nodeCount`) };
+      const at2 = await switchAt(label);
+      if (at2 && !at2.hidden) {
+        await mouse('move', at2.x, at2.y, { waitMs: 120 });
+        await mouse('click', at2.x, at2.y, { waitMs: 500 });
+      } else {
+        await evalJs(`(function () { const o = window.__l.options(); o.${keyName} = !o.${keyName}; window.__l.view().presenter.onOptionsChange(); })()`);
+      }
+      const settled2 = await settle(30000);
+      return {
+        label,
+        via,
+        before: v0,
+        after: v1,
+        domAfter: d1,
+        nodesBefore: n0,
+        nodesAfter: n1,
+        delta: n1 - n0,
+        restored: await evalJs(`window.__l.options().${keyName}`),
+        domRestored: await domEnabled(label),
+        nodesRestored: await evalJs(`window.__l.engine().model.nodeCount`),
+        settled,
+        settledBack: settled2,
+      };
     });
   }
 
   // jump depth through the panel slider, focused by a real click
   await step('depthSlider', async () => {
+    const open = await ensureOpen('filter');
     const at = json(
       await evalJs(`(function () {
         const panel = window.__l.view().contentEl.querySelector('.graph-controls');
@@ -191,19 +298,27 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
         const el = rows[0]?.querySelector('input[type=range]');
         if (!el) return null;
         const b = el.getBoundingClientRect();
-        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), label: rows[0].querySelector('.setting-item-name').textContent });
+        if (b.width < 4 || b.height < 4) return JSON.stringify({ hidden: true, w: Math.round(b.width), h: Math.round(b.height), label: rows[0].querySelector('.setting-item-name').textContent });
+        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), label: rows[0].querySelector('.setting-item-name').textContent });
       })()`),
     );
-    if (!at) return { skipped: 'no depth slider (panel closed or section collapsed)' };
+    if (!at) return { open, skipped: 'no depth slider (panel closed or row absent)' };
+    if (at.hidden) return { open, skipped: `depth slider hidden (rect ${at.w}x${at.h})` };
     const j0 = await evalJs(`window.__l.options().localJumps`);
     const n0 = await evalJs(`window.__l.engine().model.nodeCount`);
     await mouse('move', at.x, at.y, { waitMs: 120 });
     await mouse('click', at.x, at.y, { waitMs: 300 });
+    const focused = await evalJs(`document.activeElement?.type ?? document.activeElement?.className ?? null`);
     for (let i = 0; i < 4; i++) await key('ArrowRight', { waitMs: 150 });
     const j1 = await evalJs(`window.__l.options().localJumps`);
-    await waitIdle(45000);
+    const dom1 = await evalJs(`Number(document.activeElement?.value ?? NaN)`);
+    await settle(45000);
     const n1 = await evalJs(`window.__l.engine().model.nodeCount`);
-    return { label: at.label, jumps: [j0, j1], nodes: [n0, n1] };
+    for (let i = 0; i < 5; i++) await key('ArrowLeft', { waitMs: 120 });
+    const j2 = await evalJs(`window.__l.options().localJumps`);
+    await settle(45000);
+    const n2 = await evalJs(`window.__l.engine().model.nodeCount`);
+    return { open, label: at.label, at, activeEl: focused, jumps: [j0, j1, j2], domValueAtMax: dom1, nodes: [n0, n1, n2] };
   });
 
   // hovering a folded cluster inside the local graph shows the same metadata card
@@ -239,7 +354,7 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
     const before = await evalJs(`window.__l.engine()?.scopePath ?? null`);
     await evalJs(`window.__l.leaf().setViewState({ type: 'localgraph', active: true, state: { file: ${JSON.stringify(picked.big)} } })`);
     await sleep(1200);
-    await waitIdle(30000);
+    await settle(30000);
     const after = json(await evalJs(STATE));
     return { savedType: state?.type, savedFile: state?.state?.file ?? null, rootBefore: before, rootAfter: after.root, nodes: after.nodes, canvas: after.hasCanvas };
   });
@@ -260,5 +375,6 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot }) {
   });
 
   await step('errors', () => evalJs(`(window.__errs ?? []).slice(-8)`));
+  await step('finalCadence', () => cadence(2000));
   return out;
 }

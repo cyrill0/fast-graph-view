@@ -223,6 +223,9 @@ if (drive) {
     ArrowLeft: { key: 'ArrowLeft', code: 'ArrowLeft', windowsVirtualKeyCode: 37, nativeVirtualKeyCode: 37 },
     ArrowUp: { key: 'ArrowUp', code: 'ArrowUp', windowsVirtualKeyCode: 38, nativeVirtualKeyCode: 38 },
     ArrowDown: { key: 'ArrowDown', code: 'ArrowDown', windowsVirtualKeyCode: 40, nativeVirtualKeyCode: 40 },
+    // rawKeyDown on purpose: these are the camera zoom keys, and must not type into a field
+    Equal: { key: '=', code: 'Equal', windowsVirtualKeyCode: 187, nativeVirtualKeyCode: 187 },
+    Minus: { key: '-', code: 'Minus', windowsVirtualKeyCode: 189, nativeVirtualKeyCode: 189 },
   };
   const key = async (name, o = {}) => {
     const k = KEYS[name];
@@ -256,8 +259,20 @@ if (drive) {
     if (before.startsWith('(true')) await gdbus('org.gnome.ScreenSaver.SetActive', ['false']);
     return before.startsWith('(true') ? 'blanked -> cleared' : 'already awake';
   };
+  // Second cure for the same stall: an occluded window is re-raised by the compositor, which
+  // makes Chromium treat it as visible again and resume the frame sink.
+  let pageEnabled = false;
+  const raise = async () => {
+    if (!pageEnabled) {
+      await send('Page.enable', {});
+      pageEnabled = true;
+    }
+    await send('Page.bringToFront', {});
+    await sleep(400);
+    return 'raised';
+  };
   const scenario = (await import(drive)).default;
-  const report = await scenario({ send, evalJs, mouse, wheel, key, type, shot, sleep, wake });
+  const report = await scenario({ send, evalJs, mouse, wheel, key, type, shot, sleep, wake, raise });
   if (report !== undefined) console.log(typeof report === 'string' ? report : JSON.stringify(report, null, 1));
   ws.close();
   process.exit(0);

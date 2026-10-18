@@ -87,7 +87,9 @@ Deliberate departures from the built-in view, and why:
 
 - **Timelapse advances by note count**, not by calendar continuity. Core's animation
   interpolates over creation dates; here the step count is derived from the link count, so
-  the budget is spent on visible motion rather than on empty date gaps.
+  the budget is spent on visible motion rather than on empty date gaps. Neither core nor
+  this view has a stop control: `Escape` does nothing, and pressing Animate again restarts
+  the reveal from the first note. It ends when every note has been shown.
 - **No body-text or property search operators.** Links come from `metadataCache`, which
   does not index search over content; adding it would mean reading every file, which is the
   thing this plugin exists to avoid.
@@ -116,7 +118,9 @@ Deliberate departures from the built-in view, and why:
 (`--remote-debugging-port=9223`) with trusted `Input` events, and `tools/harness/*.mjs`
 are the scenarios it runs: `trusted.mjs` (hover, click, right-click, wheel, pan, node drag,
 idle-loop, click navigation), `panel.mjs` (control panel), `local.mjs` (local graph),
-`crash-watch.mjs` (renderer reload journaling), plus the older perf/probe scripts.
+`standalone.mjs` (running without the takeover of the built-in view, and the listener and
+worker teardown when the plugin is disabled), `crash-watch.mjs` (renderer reload journaling),
+plus the older perf/probe scripts.
 
 The instance has to be launched so that it keeps producing frames while another window is on
 top of it — otherwise Chromium stops its frame sink, `requestAnimationFrame` freezes, and
