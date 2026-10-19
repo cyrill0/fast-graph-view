@@ -177,13 +177,21 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
   });
 
   await step('openLocalGraph', async () => {
+    // panes left over from earlier runs make every later count ambiguous
+    const stale = json(await evalJs(`(async () => {
+      const app = window.app;
+      const n = ['localgraph', 'fast-localgraph'].reduce((a, t) => a + app.workspace.getLeavesOfType(t).length, 0);
+      for (const t of ['localgraph', 'fast-localgraph']) app.workspace.detachLeavesOfType(t);
+      await new Promise((r) => setTimeout(r, 700));
+      return JSON.stringify({ detached: n, left: ['localgraph', 'fast-localgraph'].reduce((a, t) => a + app.workspace.getLeavesOfType(t).length, 0) });
+    })()`));
     const ran = await evalJs(`window.app.commands.executeCommandById('graph:open-local')`);
     for (let i = 0; i < 60; i++) {
       const ready = await evalJs(`!!window.__l.engine()?.model`);
       if (ready) break;
       await sleep(250);
     }
-    return { commandReturned: ran, state: json(await evalJs(STATE)) };
+    return { stale, commandReturned: ran, state: json(await evalJs(STATE)) };
   });
   await step('localIdle', () => settle(45000));
   await step('shotLocal', () => shot('/tmp/shots/local-graph.png'));
@@ -205,15 +213,75 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
 
   // pinning freezes the root
   await step('pinnedKeepsRoot', async () => {
-    await evalJs(`window.__l.leaf().setPinned(true)`);
-    const root0 = await evalJs(`window.__l.engine()?.scopePath ?? null`);
-    await evalJs(`window.app.workspace.openLinkText(${JSON.stringify(picked.big)}, '', false)`);
-    await sleep(1500);
-    const root1 = await evalJs(`window.__l.engine()?.scopePath ?? null`);
-    await evalJs(`window.__l.leaf().setPinned(false)`);
-    await sleep(1500);
-    const root2 = await evalJs(`window.__l.engine()?.scopePath ?? null`);
-    return { pinned: await evalJs(`!!window.__l.leaf()?.pinned`), rootWhilePinned: [root0, root1], afterUnpin: root2 };
+    // measured on a dedicated ungrouped pane: a grouped local graph follows its group's file,
+    // and panes left over from earlier steps make the freeze/resume verdict ambiguous
+    const files = json(await evalJs(`JSON.stringify(window.app.vault.getMarkdownFiles().filter((f) => f.extension === 'md').map((f) => f.path).slice(0, 40))`));
+    const other = files.find((p) => p !== picked.big && p !== picked.deep) ?? null;
+    const setup = json(await evalJs(`(async () => {
+      const app = window.app;
+      for (const t of ['localgraph', 'fast-localgraph']) app.workspace.detachLeavesOfType(t);
+      await new Promise((r) => setTimeout(r, 700));
+      const note = await app.workspace.getLeaf(true);
+      await note.setViewState({ type: 'markdown', active: true, state: { file: ${JSON.stringify(picked.deep ?? picked.big)} } });
+      await new Promise((r) => setTimeout(r, 1200));
+      const g = await app.workspace.getLeaf(true);
+      await g.setViewState({ type: 'localgraph', active: false, state: { file: ${JSON.stringify(picked.deep ?? picked.big)} } });
+      for (let i = 0; i < 60; i++) {
+        if (g.view?.presenter?.engine?.model) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const leaf = app.workspace.getLeavesOfType('localgraph')[0] ?? null;
+      return JSON.stringify({ panes: app.workspace.getLeavesOfType('localgraph').length, group: leaf?.group ?? null, root: leaf?.view?.presenter?.engine?.scopePath ?? null });
+    })()`));
+    const state = async () =>
+      json(
+        await evalJs(`JSON.stringify((function () {
+          const l = window.__l.leaf();
+          return { root: l?.view?.presenter?.engine?.scopePath ?? null, viewFile: l?.view?.file?.path ?? null, pinned: !!l?.pinned, group: l?.group ?? null, active: window.app.workspace.getActiveFile()?.path ?? null };
+        })())`),
+      );
+    // open the third file in the markdown leaf, so the graph can only move by following;
+    // the leaf has to be activated too - getActiveFile() follows the active leaf, and a
+    // background tab would keep the old file current
+    const openInNote = async (path) => {
+      await evalJs(`(async () => {
+        let note = null, active = null;
+        window.app.workspace.iterateAllLeaves((l) => {
+          if (l.view?.getViewType?.() !== 'markdown') return;
+          if (!note) note = l;
+          if (window.app.workspace.getActiveLeaf?.() === l) active = l;
+        });
+        const target = active ?? note;
+        const file = window.app.vault.getAbstractFileByPath(${JSON.stringify(path)});
+        if (!target || !file) return;
+        window.app.workspace.setActiveLeaf(target, { focus: false });
+        await target.openFile(file);
+        await new Promise((r) => setTimeout(r, 2200));
+      })()`);
+      const s = await state();
+      s.switchFailed = s.active !== path;
+      return s;
+    };
+    const start = await state();
+    const pinnedNow = await evalJs(`(function () { const l = window.__l.leaf(); if (l) l.setPinned(true); return !!l?.pinned; })()`);
+    const whilePinned = await openInNote(other);
+    await evalJs(`(function () { const l = window.__l.leaf(); if (l) l.setPinned(false); })()`);
+    await sleep(2200);
+    const afterUnpin = await state();
+    // hand the scenario back the pane it expects, rooted on the deep note
+    const restore = await openInNote(picked.deep ?? picked.big);
+    return {
+      other,
+      setup,
+      pinnedNow,
+      start,
+      whilePinned,
+      afterUnpin,
+      restore,
+      // frozen while pinned although the file in the note changed, then back on it when released
+      held: whilePinned.root === start.root && whilePinned.active === other,
+      resumed: afterUnpin.root === other && !afterUnpin.pinned,
+    };
   });
 
   // link direction options reshape the neighbourhood - driven through the real switches
@@ -287,9 +355,8 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
   }
 
   // jump depth through the panel slider, focused by a real click
-  await step('depthSlider', async () => {
-    const open = await ensureOpen('filter');
-    const at = json(
+  const rectOfDepthSlider = async () =>
+    json(
       await evalJs(`(function () {
         const panel = window.__l.view().contentEl.querySelector('.graph-controls');
         if (!panel || panel.hasClass('is-close')) return null;
@@ -302,13 +369,28 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
         return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), label: rows[0].querySelector('.setting-item-name').textContent });
       })()`),
     );
+  await step('depthSlider', async () => {
+    const open = await ensureOpen('filter');
+    const at = await rectOfDepthSlider();
     if (!at) return { open, skipped: 'no depth slider (panel closed or row absent)' };
     if (at.hidden) return { open, skipped: `depth slider hidden (rect ${at.w}x${at.h})` };
     const j0 = await evalJs(`window.__l.options().localJumps`);
     const n0 = await evalJs(`window.__l.engine().model.nodeCount`);
     await mouse('move', at.x, at.y, { waitMs: 120 });
     await mouse('click', at.x, at.y, { waitMs: 300 });
-    const focused = await evalJs(`document.activeElement?.type ?? document.activeElement?.className ?? null`);
+    let focused = await evalJs(`document.activeElement?.type ?? document.activeElement?.className ?? null`);
+    let clicks = 1;
+    if (focused !== 'range') {
+      // keys only reach the slider if the click actually landed on it - aim again at a fresh rect
+      const again = await rectOfDepthSlider();
+      if (again && !again.hidden) {
+        await mouse('move', again.x, again.y, { waitMs: 120 });
+        await mouse('click', again.x, again.y, { waitMs: 300 });
+        clicks++;
+      }
+      focused = await evalJs(`document.activeElement?.type ?? document.activeElement?.className ?? null`);
+    }
+    if (focused !== 'range') return { open, label: at.label, at, activeEl: focused, clicks, skipped: 'slider never took focus' };
     for (let i = 0; i < 4; i++) await key('ArrowRight', { waitMs: 150 });
     const j1 = await evalJs(`window.__l.options().localJumps`);
     const dom1 = await evalJs(`Number(document.activeElement?.value ?? NaN)`);
@@ -318,7 +400,7 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
     const j2 = await evalJs(`window.__l.options().localJumps`);
     await settle(45000);
     const n2 = await evalJs(`window.__l.engine().model.nodeCount`);
-    return { open, label: at.label, at, activeEl: focused, jumps: [j0, j1, j2], domValueAtMax: dom1, nodes: [n0, n1, n2] };
+    return { open, label: at.label, at, activeEl: focused, clicks, jumps: [j0, j1, j2], domValueAtMax: dom1, nodes: [n0, n1, n2] };
   });
 
   // hovering a folded cluster inside the local graph shows the same metadata card
@@ -362,15 +444,42 @@ export default async function ({ evalJs, mouse, key, type, sleep, shot, wake, ra
   // teardown: closing the leaf must leave no orphan canvas behind and must not hurt the global view
   await step('closeAndLeakCheck', async () => {
     const canvases0 = await evalJs(`document.querySelectorAll('.fast-graph-gl').length`);
-    await evalJs(`window.__l.leaf().setViewState({ type: 'empty', active: false })`);
-    await sleep(800);
+    // a global view has to exist before the local one closes, else "still works" checks nothing;
+    // getLeaf(false) would reuse the active leaf, which here is the local graph itself
+    const globalBefore = json(await evalJs(`(async () => {
+      const app = window.app;
+      const leaf = app.workspace.getLeaf(true);
+      await leaf.setViewState({ type: 'graph', active: false, state: {} });
+      for (let i = 0; i < 80; i++) {
+        if (app.workspace.getLeavesOfType('graph')[0]?.view?.presenter?.engine?.model) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const l = app.workspace.getLeavesOfType('graph')[0] ?? null;
+      return JSON.stringify({ graphLeaves: app.workspace.getLeavesOfType('graph').length, nodes: l?.view?.presenter?.engine?.model?.nodeCount ?? null });
+    })()`));
+    const local = json(await evalJs(`JSON.stringify((function () {
+      const l = window.app.workspace.getLeavesOfType('localgraph')[0] ?? null;
+      return JSON.stringify({ found: !!l, ours: !!l?.view?.presenter, pinned: !!l?.pinned });
+    })())`));
+    await evalJs(`(async () => {
+      const l = window.app.workspace.getLeavesOfType('localgraph')[0];
+      if (l) await l.setViewState({ type: 'empty', active: false });
+      await new Promise((r) => setTimeout(r, 800));
+    })()`);
     return {
       canvasesBefore: canvases0,
       canvasesAfter: await evalJs(`document.querySelectorAll('.fast-graph-gl').length`),
+      localBefore: local,
       localLeaves: await evalJs(`window.app.workspace.getLeavesOfType('localgraph').length`),
+      globalBefore,
       globalGraphStillWorks: json(
-        await evalJs(`JSON.stringify({ graphLeaves: window.app.workspace.getLeavesOfType('graph').length, nodes: window.app.workspace.getLeavesOfType('graph')[0]?.view?.presenter?.engine?.model?.nodeCount ?? null })`),
+        await evalJs(`JSON.stringify({ graphLeaves: window.app.workspace.getLeavesOfType('graph').length, ours: !!window.app.workspace.getLeavesOfType('graph')[0]?.view?.presenter, nodes: window.app.workspace.getLeavesOfType('graph')[0]?.view?.presenter?.engine?.model?.nodeCount ?? null })`),
       ),
+      canvasesAfterGlobalDetach: await evalJs(`(async () => {
+        window.app.workspace.detachLeavesOfType('graph');
+        await new Promise((r) => setTimeout(r, 700));
+        return document.querySelectorAll('.fast-graph-gl').length;
+      })()`),
     };
   });
 

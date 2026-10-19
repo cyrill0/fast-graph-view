@@ -4,6 +4,8 @@
 //
 // The panel floats above the canvas, so aiming is by element rect rather than node position.
 
+import { readFileSync } from 'node:fs';
+
 const FRAME_SOURCE = `(async () => {
   const windows = [];
   for (let w = 0; w < 2; w++) {
@@ -23,6 +25,21 @@ const CONTEXT = `(() => {
     addEventListener('unhandledrejection', (ev) => window.__errs.push('reject: ' + String(ev.reason).slice(0, 200)));
     const orig = console.error.bind(console);
     console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ').slice(0, 200)); orig(...a); };
+  }
+  // a dead sim worker silently downgrades to main-thread physics and only reports one line,
+  // so keep the thrown stack: it is the only evidence of where the worker actually died
+  if (!window.__werr && window.Worker) {
+    window.__werr = [];
+    const Native = window.Worker;
+    function Wrapped(url, o) {
+      const w = new Native(url, o);
+      w.addEventListener('error', (ev) => {
+        window.__werr.push({ msg: String(ev.message).slice(0, 160), stack: String(ev.error?.stack ?? '(no error object)').slice(0, 900) });
+      });
+      return w;
+    }
+    Wrapped.prototype = Native.prototype;
+    window.Worker = Wrapped;
   }
   const app = window.app;
   const leaf = () => app.workspace.getLeavesOfType('graph')[0] ?? null;
@@ -201,7 +218,36 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
 
   await step('frameSource', () => evalJs(FRAME_SOURCE));
   await step('context', () => evalJs(`${CONTEXT}; 1`));
+  // the leaf usually already exists when this attaches, and its worker was built by the
+  // unwrapped constructor - reopen so the recorded worker covers the whole run
+  await step('freshView', async () => {
+    const opened = await evalJs(`(async () => {
+      const app = window.app;
+      app.workspace.detachLeavesOfType('graph');
+      await new Promise((r) => setTimeout(r, 500));
+      app.commands.executeCommandById('graph:open');
+      for (let i = 0; i < 80; i++) {
+        if (window.__p.engine()?.model) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const e = window.__p.engine();
+      return JSON.stringify({ leaves: app.workspace.getLeavesOfType('graph').length, nodes: e?.model?.nodeCount ?? null });
+    })()`);
+    return json(opened);
+  });
+  const health = async () =>
+    json(
+      await evalJs(`JSON.stringify((function () {
+        const e = window.__p.engine();
+        return {
+          usingWorker: e?.driver?.usingWorker ?? null,
+          workerErrors: window.__werr ?? [],
+          status: e?.host?.statusEl?.textContent ?? document.querySelector('.fast-graph-status')?.textContent ?? null,
+        };
+      })())`),
+    );
   await step('beforeIdle', () => settle(60000));
+  await step('workerHealth', health);
   out.baseline = await step('optionsBefore', () => snapshot());
 
   await step('panelChrome', () =>
@@ -241,15 +287,27 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
       const stored = async () =>
         json(await evalJs(`(function () {
           const key = ${JSON.stringify(collapseKey[s])};
-          const core = window.app.plugins.plugins.graph;
-          return JSON.stringify({ live: core?.options?.[key] ?? null, file: core?.data?.graph?.[key] ?? null });
+          const core = window.app.internalPlugins?.getEnabledPluginById?.('graph');
+          return JSON.stringify({ live: core?.options?.[key] ?? null, base: window.app.vault.adapter.basePath ?? null });
         })()`));
+      /** the vault's own graph.json, read from disk: an in-memory copy proves nothing */
+      const onDisk = async (base) => {
+        if (!base) return { skipped: 'no vault path' };
+        try {
+          const j = JSON.parse(readFileSync(`${base}/.obsidian/graph.json`, 'utf8'));
+          return { file: j[collapseKey[s]] ?? null, keys: Object.keys(j).length };
+        } catch (e) {
+          return { failed: String(e.message ?? e) };
+        }
+      };
       const after = await read();
       const storedAfter = await stored();
+      const diskAfter = await onDisk(storedAfter?.base);
       const at2 = await clickSel(sel, 500);
       const restored = await read();
       await sleep(600);
-      return { at, after, storedAfter, restored, storedRestored: await stored(), at2 };
+      const storedRestored = await stored();
+      return { at, after, storedAfter, diskAfter, restored, storedRestored, diskRestored: await onDisk(storedRestored?.base), at2 };
     });
   }
 
@@ -302,14 +360,18 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
   // search: real typing into the panel field, Enter commits
   await step('search', async () => {
     await ensureOpen('filter');
-    const at = await named('input', '');
+    const searchSel = '.graph-controls .mod-filter .search-input-container input';
+    const at = await rect(searchSel);
     if (!at) return { skipped: 'no search input' };
     if (at.hidden) return { skipped: 'search input hidden', at };
     await clickAt(at, 300);
     await type('path:ETH');
-    const typed = await evalJs(`window.__p.options().search`);
+    // native debounces the query and only writes it on Enter, so an immediate read is expected to lag
+    const beforeCommit = await evalJs(`window.__p.options().search`);
     await key('Enter', { waitMs: 1000 });
     const settled = await settle(45000);
+    const committed = await evalJs(`window.__p.options().search`);
+    const domValue = await evalJs(`document.querySelector(${JSON.stringify(searchSel)})?.value ?? null`);
     const filtered = await snapshot();
     const status = await evalJs(`window.__p.view().contentEl.querySelector('.fast-graph-status')?.textContent ?? null`);
     await shot('/tmp/shots/panel-search.png');
@@ -320,8 +382,10 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     const restoredSettle = await settle(45000);
     const restored = await snapshot();
     return {
-      label: at.label,
-      typed,
+      click: { x: at.x, y: at.y, w: at.w, h: at.h },
+      beforeCommit,
+      committed,
+      domValue,
       settled,
       filtered: { nodes: filtered.nodes, files: filtered.files, clusters: filtered.clusters, tags: filtered.tags, edges: filtered.edges },
       status,
@@ -407,6 +471,8 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     if (at.hidden) return { open, skipped: `slider "${at.label}" hidden`, at };
     const v0 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     await clickAt(at, 300);
+    // a track click itself sets the value, so read it before crediting the arrow keys
+    const afterClick = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     for (let i = 0; i < 5; i++) await key('ArrowRight', { waitMs: 120 });
     const v1 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     // read the row that was driven, not the first slider in the section
@@ -417,9 +483,24 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     })()`);
     const focused = await evalJs(`document.activeElement?.className ?? null`);
     await clickAt(await named('slider', 'node size'), 200);
+    const afterClick2 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     for (let i = 0; i < 5; i++) await key('ArrowLeft', { waitMs: 120 });
     const v2 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
-    return { open, label: at.label, at, before: v0, afterRight: v1, domValue, activeEl: focused, afterLeft: v2 };
+    const round = (x) => (x === null ? null : Math.round(x * 1e6) / 1e6);
+    return {
+      open,
+      label: at.label,
+      at,
+      before: round(v0),
+      afterClick: round(afterClick),
+      afterRight: round(v1),
+      keyStepRight: round(v1 - afterClick),
+      domValue,
+      activeEl: focused,
+      afterClick2: round(afterClick2),
+      afterLeft: round(v2),
+      keyStepLeft: round(v2 - afterClick2),
+    };
   });
 
   // Timelapse. The native `renderProgression` has no stop path, so the stop below is the engine
@@ -533,6 +614,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     return { at, settled, after: await snapshot() };
   });
 
+  await step('workerHealthEnd', health);
   await step('errors', () => evalJs(`(window.__errs ?? []).slice(-8)`));
   await step('status', () => evalJs(`window.__p.view().contentEl.querySelector('.fast-graph-status')?.textContent ?? null`));
   await step('finalCadence', () =>

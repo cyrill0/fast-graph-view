@@ -31,28 +31,44 @@ const INSTRUMENT = `(() => {
     console.error = (...a) => { window.__errs.push('console: ' + a.map(String).join(' ').slice(0, 200)); orig(...a); };
   }
   if (!window.__lk) {
-    window.__lk = { add: {}, rem: {} };
+    window.__lk = { add: {}, rem: {}, live: new Map() };
     const add = window.addEventListener.bind(window);
     const rem = window.removeEventListener.bind(window);
-    window.addEventListener = function (type, ...rest) {
+    const site = () => (new Error().stack || '').split('\\n').slice(2, 5).map((s) => s.trim()).join(' <- ').slice(0, 260);
+    window.addEventListener = function (type, fn, ...rest) {
       window.__lk.add[type] = (window.__lk.add[type] ?? 0) + 1;
-      return add(type, ...rest);
+      if (fn) {
+        const rec = window.__lk.live.get(fn) ?? [];
+        rec.push({ type, head: String(fn).slice(0, 70), stack: site() });
+        window.__lk.live.set(fn, rec);
+      }
+      return add(type, fn, ...rest);
     };
-    window.removeEventListener = function (type, ...rest) {
+    window.removeEventListener = function (type, fn, ...rest) {
       window.__lk.rem[type] = (window.__lk.rem[type] ?? 0) + 1;
-      return rem(type, ...rest);
+      const rec = window.__lk.live.get(fn);
+      if (rec) {
+        const i = rec.findIndex((r) => r.type === type);
+        if (i >= 0) rec.splice(i, 1);
+        if (!rec.length) window.__lk.live.delete(fn);
+      }
+      return rem(type, fn, ...rest);
     };
   }
   if (!window.__wk && window.Worker) {
     const Native = window.Worker;
-    window.__wk = { created: 0, terminated: 0, refs: [] };
+    const siteOf = () => (new Error().stack || '').split('\\n').slice(2, 5).map((s) => s.trim()).join(' <- ').slice(0, 260);
+    window.__wk = { created: 0, terminated: 0, refs: [], sites: [] };
     function Wrapped(url, o) {
       const w = new Native(url, o);
       window.__wk.created++;
+      window.__wk.sites.push({ url: String(url).slice(0, 40), stack: siteOf(), alive: true });
+      const site = window.__wk.sites[window.__wk.sites.length - 1];
       window.__wk.refs.push(w);
       const terminate = w.terminate.bind(w);
       w.terminate = function () {
         window.__wk.terminated++;
+        site.alive = false;
         return terminate();
       };
       return w;
@@ -137,8 +153,11 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
       if (!p) return 'NO PLUGIN';
       p.settings.takeover = ${value};
       p.reRegister();
+      // persist like the settings toggle does: disable saves, and an unsaved flip would
+      // silently come back as the old mode on the next enable
+      await p.saveData();
       await new Promise((r) => setTimeout(r, 1200));
-      return p.settings.takeover;
+      return JSON.stringify({ memory: p.settings.takeover, onDisk: (await p.loadData())?.takeover ?? null });
     })()`);
 
   await wake();
@@ -190,25 +209,28 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
             enabled: (namespaced ?? bare) ? app.commands.checkCommand?.(pid + ':' + id) ?? true : null,
           };
         }
-        return JSON.stringify({ pid, raw, table, palette: app.commands.listCommands().filter((c) => /clustered graph|timelapse/i.test(c)) });
+        return JSON.stringify({ pid, raw, table, palette: app.commands.listCommands().filter((c) => /clustered graph|timelapse|fast graph/i.test(c.name ?? '')).map((c) => ({ id: c.id, name: c.name })) });
       })()`),
     );
     return r;
   });
   await step('standaloneTypeOpens', async () => {
-    const opened = await evalJs(`(async () => {
+    const opened = json(await evalJs(`(async () => {
       const app = window.app;
       const leaf = app.workspace.getLeaf(false);
       await leaf.setViewState({ type: 'fast-graph-view', active: true, state: {} });
       await new Promise((r) => setTimeout(r, 400));
-      return 'opened';
-    })()`);
+      return JSON.stringify({ requested: 'fast-graph-view', actualType: leaf.view?.getViewType?.() ?? null });
+    })()`));
     const ready = await waitEngine('fast-graph-view');
     const info = json(
       await evalJs(`(() => {
         const l = window.app.workspace.getLeavesOfType('fast-graph-view')[0] ?? null;
         const e = l?.view?.presenter?.engine ?? null;
         return JSON.stringify({
+          leavesOfType: window.app.workspace.getLeavesOfType('fast-graph-view').length,
+          emptyLeaves: window.app.workspace.getLeavesOfType('empty').length,
+          viewType: l?.view?.getViewType?.() ?? null,
           ours: !!(l?.view?.presenter),
           nodes: e?.model?.nodeCount ?? null,
           clusters: e?.model?.stats?.clusters ?? null,
@@ -217,7 +239,7 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
         });
       })()`),
     );
-    return { opened, ready, ...info };
+    return { ...opened, ready, ...info };
   });
   await step('standaloneLocalOpens', async () => {
     const r = await evalJs(`(async () => {
@@ -227,12 +249,62 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
       await leaf.setViewState({ type: 'markdown', active: true, state: { file: file.path } });
       await new Promise((r2) => setTimeout(r2, 500));
       const ok = app.commands.executeCommandById('fast-graph-view:open-local') || app.commands.executeCommandById('open-local');
-      await new Promise((r2) => setTimeout(r2, 900));
-      return JSON.stringify({ file: file.path, byId: ok, localLeaves: app.workspace.getLeavesOfType('fast-localgraph').length });
+      await new Promise((r2) => setTimeout(r2, 1600));
+      const l = app.workspace.getLeavesOfType('fast-localgraph')[0] ?? null;
+      return JSON.stringify({
+        file: file.path,
+        byId: ok,
+        localLeaves: app.workspace.getLeavesOfType('fast-localgraph').length,
+        viewType: l?.view?.getViewType?.() ?? null,
+        ours: !!(l?.view?.presenter),
+        nodes: l?.view?.presenter?.engine?.model?.nodeCount ?? null,
+        root: l?.view?.presenter?.engine?.scopePath ?? null,
+      });
     })()`);
     return json(r);
   });
   await step('shotStandalone', () => shot('/tmp/shots/standalone-our-graph.png'));
+
+  // a mode flip must carry open panes across: same count, ours again, nothing stranded
+  const census = async () =>
+    json(
+      await evalJs(`JSON.stringify((function () {
+        const app = window.app;
+        const reg = app.viewRegistry ?? {};
+        const panes = [];
+        for (const type of ['graph', 'localgraph', 'fast-graph-view', 'fast-localgraph']) {
+          for (const leaf of app.workspace.getLeavesOfType(type)) {
+            panes.push({ type, viewType: leaf.view?.getViewType?.() ?? null, ours: !!leaf.view?.presenter, creator: !!reg.viewByType?.[type] });
+          }
+        }
+        const ours = panes.filter((p) => p.ours).length;
+        const orphaned = panes.filter((p) => !p.creator).length;
+        return { ours, orphaned, panes };
+      })())`),
+    );
+  await step('paneMigration', async () => {
+    const off = await census();
+    await setTakeover(true);
+    await sleep(2500);
+    const on = await census();
+    const offAgain = await (async () => {
+      await setTakeover(false);
+      await sleep(2500);
+      return await census();
+    })();
+    await setTakeover(true);
+    await sleep(2500);
+    const restored = await census();
+    return {
+      off,
+      on,
+      offAgain,
+      restored,
+      preserved: off.ours === on.ours && on.ours === offAgain.ours,
+      oursEverywhere: [off, on, offAgain, restored].every((c) => c.ours === c.panes.length),
+      neverOrphaned: [off, on, offAgain, restored].every((c) => c.orphaned === 0),
+    };
+  });
 
   // 2) back to takeover: existing native leaves must be re-created as ours
   await step('takeoverRestored', () => setTakeover(true));
@@ -247,8 +319,24 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
   });
 
   // 3) teardown: disable the plugin and count what came back
+  const OUTSTANDING = `(function () {
+    const live = [];
+    try {
+      for (const [fn, recs] of (window.__lk?.live?.entries?.() ?? [])) {
+        for (const r of recs) live.push({ type: r.type, head: String(fn).slice(0, 50), stack: r.stack });
+      }
+    } catch (e) { /* the map was replaced by a reload */ }
+    const ours = live.filter((l) => (l.stack || '').includes('plugin://fast-graph-view'));
+    return {
+      total: live.length,
+      ours: ours.length,
+      sample: live.slice(0, 3).map((o) => o.type + ' @ ' + o.stack),
+      ourStacks: ours.map((o) => o.type + ' @ ' + o.stack).slice(0, 6),
+      aliveWorkers: (window.__wk?.sites ?? []).filter((s) => s.alive).map((s) => s.url + ' @ ' + s.stack).slice(0, 6),
+    };
+  })()`;
   await step('disablePlugin', async () => {
-    const before = await evalJs(`JSON.stringify({ add: window.__lk.add.pointerup ?? 0, rem: window.__lk.rem.pointerup ?? 0, kd: window.__lk.add.keydown ?? 0, kdr: window.__lk.rem.keydown ?? 0, wk: window.__wk })`);
+    const before = await evalJs(`JSON.stringify({ add: window.__lk.add.pointerup ?? 0, rem: window.__lk.rem.pointerup ?? 0, kd: window.__lk.add.keydown ?? 0, kdr: window.__lk.rem.keydown ?? 0, wk: window.__wk, out: ${OUTSTANDING} })`);
     const r = await evalJs(`(async () => {
       const app = window.app;
       await app.plugins.disablePlugin('fast-graph-view');
@@ -260,13 +348,14 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
         canvases: document.querySelectorAll('canvas.fast-graph-gl').length,
         stageEls: document.querySelectorAll('.fast-graph-stage').length,
         grabClass: document.body.classList.contains('is-grabbing'),
-        workers: window.__wk,
+        workers: { created: window.__wk.created, terminated: window.__wk.terminated },
         listeners: {
           pointerupAdd: window.__lk.add.pointerup ?? 0,
           pointerupRemove: window.__lk.rem.pointerup ?? 0,
           keydownAdd: window.__lk.add.keydown ?? 0,
           keydownRemove: window.__lk.rem.keydown ?? 0,
         },
+        out: ${OUTSTANDING},
       });
     })()`);
     return { before: json(before), after: json(r), delta: null };
@@ -282,8 +371,13 @@ export default async function ({ evalJs, mouse, key, sleep, shot, wake, raise })
       pointerupRemovedByDisable: (a.listeners?.pointerupRemove ?? 0) - (b.rem ?? 0),
       keydownAddedByDisable: (a.listeners?.keydownAdd ?? 0) - (b.kd ?? 0),
       keydownRemovedByDisable: (a.listeners?.keydownRemove ?? 0) - (b.kdr ?? 0),
+      ourListenersBefore: b.out?.ours ?? null,
+      ourListenersAfter: a.out?.ours ?? null,
+      survivingOurStacks: a.out?.ourStacks ?? null,
       workersCreatedBefore: b.wk?.created ?? null,
       workersTerminatedByDisable: (a.workers?.terminated ?? 0) - (b.wk?.terminated ?? 0),
+      aliveWorkersBefore: (b.out?.aliveWorkers ?? []).length,
+      aliveWorkersAfter: a.out?.aliveWorkers ?? null,
       canvasesAfter: a.canvases ?? null,
       stageElsAfter: a.stageEls ?? null,
     };

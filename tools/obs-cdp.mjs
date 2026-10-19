@@ -11,6 +11,8 @@ const PORT = process.env.OBS_CDP_PORT ?? '9223';
 const args = process.argv.slice(2);
 let awaitPromise = false;
 let bringToFront = false;
+let pumpMs = 0;
+let pumpStop = () => {};
 let shotPath = null;
 let pull = null;
 let drive = null;
@@ -20,6 +22,7 @@ let exprSource = null;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--await') awaitPromise = true;
   else if (args[i] === '--front') bringToFront = true;
+  else if (args[i] === '--pump') pumpMs = Number(args[i + 1]) > 0 ? Number(args[++i]) : 250;
   else if (args[i] === '--cast') screencast = true;
   else if (args[i] === '--target') targetMatch = args[++i];
   else if (args[i] === '--shot') shotPath = args[++i];
@@ -76,7 +79,24 @@ function send(method, params) {
 if (bringToFront) {
   await send('Page.enable', {});
   await send('Page.bringToFront', {});
-  await new Promise((r) => setTimeout(r, 1000));
+  // an occluded window is throttled by Chromium and its frame sink stops; only the renderer's
+  // own Electron handle can opt out, so do it before the scenario measures anything
+  const unthrottle = `(async () => { try { const w = require('electron').remote.getCurrentWindow(); w.setBackgroundThrottling(false); return 'off'; } catch (e) { return 'unavailable: ' + String(e.message).slice(0, 60); } })()`;
+  const r = await send('Runtime.evaluate', { expression: unthrottle, awaitPromise: true, returnByValue: true });
+  console.error(`[cdp] background throttling: ${r.result?.result?.value ?? 'eval failed'}`);
+  await new Promise((r2) => setTimeout(r2, 1000));
+}
+
+if (pumpMs > 0) {
+  // An asleep output stops the compositor feeding frames: rAF freezes while timers keep
+  // running, and every cadence or settle number would then describe a frozen app. Forcing a
+  // cheap capture keeps the frame stream alive without touching app state.
+  await send('Page.enable', {});
+  const pumpHandle = setInterval(() => {
+    send('Page.captureScreenshot', { format: 'jpeg', quality: 10 }).catch(() => {});
+  }, pumpMs);
+  pumpStop = () => clearInterval(pumpHandle);
+  console.error(`[cdp] pumping frames every ${pumpMs} ms`);
 }
 
 if (screencast) {
@@ -260,20 +280,27 @@ if (drive) {
     return before.startsWith('(true') ? 'blanked -> cleared' : 'already awake';
   };
   // Second cure for the same stall: an occluded window is re-raised by the compositor, which
-  // makes Chromium treat it as visible again and resume the frame sink.
+  // makes Chromium treat it as visible again and resume the frame sink. Raising alone is not
+  // enough - Chromium keeps the backgrounded contents throttled - so also opt out in the page.
   let pageEnabled = false;
+  const UNTHROTTLE = "(() => { try { const w = require('electron').remote.getCurrentWindow(); w.setBackgroundThrottling(false); return 'off'; } catch (e) { return 'unavailable: ' + String(e.message).slice(0, 60); } })()";
   const raise = async () => {
     if (!pageEnabled) {
       await send('Page.enable', {});
       pageEnabled = true;
     }
     await send('Page.bringToFront', {});
+    // re-applied every time: Chromium puts the throttling back once it re-judges the window,
+    // and a settle that spins at 0 fps makes every later timing number meaningless
+    const r = await send('Runtime.evaluate', { expression: UNTHROTTLE, awaitPromise: true, returnByValue: true });
+    const state = r.result?.result?.value ?? 'eval failed';
     await sleep(400);
-    return 'raised';
+    return state === 'off' ? 'raised + unthrottled' : 'raised';
   };
   const scenario = (await import(drive)).default;
   const report = await scenario({ send, evalJs, mouse, wheel, key, type, shot, sleep, wake, raise });
   if (report !== undefined) console.log(typeof report === 'string' ? report : JSON.stringify(report, null, 1));
+  pumpStop();
   ws.close();
   process.exit(0);
 }
