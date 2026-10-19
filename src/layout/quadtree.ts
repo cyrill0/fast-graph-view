@@ -126,7 +126,10 @@ export class BarnesHut {
       return;
     }
     const size = Math.max(maxX - minX, maxY - minY, 1);
-    this.minSize = size * 1e-7;
+    // cell bounds are float32: below the resolution of the largest coordinate a child is an exact
+    // copy of its parent, so that resolution is where splitting has to stop
+    const magnitude = Math.max(Math.abs(minX), Math.abs(maxX), Math.abs(minY), Math.abs(maxY), 1);
+    this.minSize = Math.max(size * 1e-7, magnitude * 2 ** -23);
     this.root = this.alloc(minX, minY, minX + size, minY + size);
 
     for (let i = 0; i < count; i++) {
