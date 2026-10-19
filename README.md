@@ -56,6 +56,10 @@ ribbon icon, the command palette entries and the "Open in graph view" file-menu 
 every existing keybinding, ribbon click and internal link into the graph lands here. Turning
 it off puts the core plugin's creators back untouched.
 
+Flipping that toggle while panes are open re-registers those panes under the type that is valid
+in the new mode - ours when takeover goes off, the core types when it comes back on - so nothing
+is left behind as a placeholder the next start cannot restore.
+
 Configuration is interchangeable: the graph options use the core plugin's keys, ranges and
 defaults verbatim, so `.obsidian/graph.json` written by the built-in view reads straight
 into this plugin, and per-leaf state (zoom, pan, filters) round-trips through the same

@@ -100,6 +100,9 @@ export default class FastGraphPlugin extends Plugin {
     );
     this.addSettingTab(new FastGraphSettings(this.app, this));
     this.applyRegistration();
+    // onload runs while the layout is still loading, so a pane restored from the other mode
+    // (its type has no creator, and it comes back as a dead placeholder) only exists later
+    this.app.workspace.onLayoutReady(() => this.migrateLeaves());
   }
 
   onunload(): void {
@@ -167,11 +170,49 @@ export default class FastGraphPlugin extends Plugin {
         : null
       : STANDALONE_LOCAL_TYPE;
 
-    this.registerType(this.globalType, takeover, (leaf) => new FastGraphView(leaf, this.deps));
-    if (this.localType !== null) {
-      this.registerType(this.localType, takeover, (leaf) => new FastLocalGraphView(leaf, this.deps));
+    // bound now: a view keeps the type its registration used, even if this changes later
+    const globalType = this.globalType;
+    const localType = this.localType;
+
+    this.registerType(globalType, takeover, (leaf) => new FastGraphView(leaf, this.deps, globalType));
+    if (localType !== null) {
+      this.registerType(localType, takeover, (leaf) => new FastLocalGraphView(leaf, this.deps, localType));
     }
     this.addSurfaces(takeover);
+    this.migrateLeaves();
+  }
+
+  /**
+   * A mode flip moves our panes between the borrowed native types and our own. A leaf keeps the
+   * type it was created with, so the only way to change it is a new view - and a pane left on a
+   * type that has no creator comes back as a dead placeholder on the next start. Native panes
+   * the user opened themselves are never touched.
+   */
+  private migrateLeaves(): void {
+    const registry = this.registry();
+    const ours = (leaf: WorkspaceLeaf): boolean =>
+      leaf.view instanceof FastGraphView || leaf.view instanceof FastLocalGraphView;
+    const moves: [string, string, (leaf: WorkspaceLeaf) => boolean][] = [];
+    if (this.globalType !== GRAPH_VIEW_TYPE) moves.push([GRAPH_VIEW_TYPE, this.globalType, ours]);
+    if (this.localType !== null && this.localType !== LOCAL_GRAPH_VIEW_TYPE) {
+      moves.push([LOCAL_GRAPH_VIEW_TYPE, this.localType, ours]);
+    }
+    const localTarget = this.localType ?? LOCAL_GRAPH_VIEW_TYPE;
+    for (const [type, to] of [
+      [STANDALONE_GRAPH_TYPE, this.globalType],
+      [STANDALONE_LOCAL_TYPE, localTarget],
+    ] as [string, string][]) {
+      if (!registry?.viewByType?.[type] && type !== to) moves.push([type, to, () => true]);
+    }
+    for (const [from, to, include] of moves) {
+      for (const leaf of this.app.workspace.getLeavesOfType(from)) {
+        if (!include(leaf)) continue;
+        const state = leaf.getViewState();
+        // same leaf, new type: detaching first would drop the pane, because the replacement
+        // leaf lookup can hand back the leaf that is already gone
+        void leaf.setViewState({ type: to, state: state.state as Record<string, unknown>, active: false });
+      }
+    }
   }
 
   private registerType(type: string, takeover: boolean, creator: ViewCreator): void {

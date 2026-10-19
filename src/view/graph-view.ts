@@ -416,7 +416,12 @@ export class FastGraphView extends ItemView {
   private readonly presenter: GraphPresenter;
   private opened = false;
 
-  constructor(leaf: WorkspaceLeaf, private readonly deps: GraphViewDeps) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    private readonly deps: GraphViewDeps,
+    /** the type this view is registered under: "graph" under takeover, our own otherwise */
+    private readonly viewTypeId: string = GRAPH_VIEW_TYPE,
+  ) {
     super(leaf);
     this.presenter = new GraphPresenter({
       contentEl: this.contentEl,
@@ -429,7 +434,7 @@ export class FastGraphView extends ItemView {
   }
 
   getViewType(): string {
-    return GRAPH_VIEW_TYPE;
+    return this.viewTypeId;
   }
 
   getDisplayText(): string {
@@ -498,7 +503,12 @@ export class FastLocalGraphView extends FileView {
   private updateTimer = 0;
   private opened = false;
 
-  constructor(leaf: WorkspaceLeaf, deps: GraphViewDeps) {
+  constructor(
+    leaf: WorkspaceLeaf,
+    deps: GraphViewDeps,
+    /** the type this view is registered under: "localgraph" under takeover, our own otherwise */
+    private readonly viewTypeId: string = LOCAL_GRAPH_VIEW_TYPE,
+  ) {
     super(leaf);
     this.presenter = new GraphPresenter({
       contentEl: this.contentEl,
@@ -511,7 +521,7 @@ export class FastLocalGraphView extends FileView {
   }
 
   getViewType(): string {
-    return LOCAL_GRAPH_VIEW_TYPE;
+    return this.viewTypeId;
   }
 
   getDisplayText(): string {
