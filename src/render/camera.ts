@@ -98,6 +98,19 @@ export class Camera {
     this.anchorAt(this.width / 2, this.height / 2);
   }
 
+  /** Zoom toward a touch/pointer anchor, keeping that screen point in place. */
+  zoomAt(factor: number, cssX: number, cssY: number): void {
+    this.targetZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, this.targetZoom * factor));
+    this.anchorAt(cssX, cssY);
+  }
+
+  /** A new direct-manipulation gesture should not inherit an old inertial pan. */
+  stopGlide(): void {
+    this.velocityX = 0;
+    this.velocityY = 0;
+    this.gliding = false;
+  }
+
   panBy(dx: number, dy: number): void {
     this.panX += dx;
     this.panY += dy;

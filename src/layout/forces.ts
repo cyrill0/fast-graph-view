@@ -86,9 +86,10 @@ export class SimulationCore {
 
   // spatial hash for the collide pass
   private tableSize = 0;
-  private cellKey: Int32Array = new Int32Array(0);
   private cellHead: Int32Array = new Int32Array(0);
   private nextNode: Int32Array = new Int32Array(0);
+  private nodeCellX: Int32Array = new Int32Array(0);
+  private nodeCellY: Int32Array = new Int32Array(0);
 
   alpha = ALPHA_START;
   alphaTarget = 0;
@@ -130,9 +131,10 @@ export class SimulationCore {
 
     this.tableSize = 1;
     while (this.tableSize < n * 4) this.tableSize <<= 1;
-    this.cellKey = new Int32Array(this.tableSize);
     this.cellHead = new Int32Array(this.tableSize);
     this.nextNode = new Int32Array(n);
+    this.nodeCellX = new Int32Array(n);
+    this.nodeCellY = new Int32Array(n);
     this.ticks = 0;
   }
 
@@ -276,49 +278,56 @@ export class SimulationCore {
    */
   private collide(baseRadius: number, strength: number): void {
     const n = this.n;
-    const cell = Math.max(10, baseRadius * 2);
+    const size = this.tableSize;
+    if (!size || !n) return;
     const pos = this.pos;
     const vx = this.vx;
     const vy = this.vy;
     const radius = this.radius;
-    const key = this.cellKey;
     const head = this.cellHead;
     const next = this.nextNode;
-    const size = this.tableSize;
-    if (!size) return;
-    key.fill(-1);
+    const cellX = this.nodeCellX;
+    const cellY = this.nodeCellY;
+    const mask = size - 1;
 
-    let maxR = 0;
+    let maxR = baseRadius;
     for (let i = 0; i < n; i++) {
       const r = radius[i] || baseRadius;
       if (r > maxR) maxR = r;
-      const slot = this.slotFor(pos[i * 2], pos[i * 2 + 1], cell, key, head, size);
+    }
+    const cell = Math.max(10, maxR * 2);
+    const invCell = 1 / cell;
+    head.fill(-1);
+
+    for (let i = 0; i < n; i++) {
+      const cx = Math.floor((pos[i * 2] + vx[i]) * invCell);
+      const cy = Math.floor((pos[i * 2 + 1] + vy[i]) * invCell);
+      cellX[i] = cx;
+      cellY[i] = cy;
+      const slot = hashCell(cx, cy) & mask;
       next[i] = head[slot];
       head[slot] = i;
     }
-
-    const reach = maxR + baseRadius;
 
     for (let i = 0; i < n; i++) {
       const ri = radius[i] || baseRadius;
       const xi = pos[i * 2] + vx[i];
       const yi = pos[i * 2 + 1] + vy[i];
-      const cx = Math.floor(xi / cell);
-      const cy = Math.floor(yi / cell);
-      const w = Math.min(8, Math.ceil((ri + maxR) / cell));
-      for (let oy = -w; oy <= w; oy++) {
+      const cx = cellX[i];
+      const cy = cellY[i];
+      for (let oy = -1; oy <= 1; oy++) {
         const gy = cy + oy;
-        for (let ox = -w; ox <= w; ox++) {
-          if (ox * ox + oy * oy > reach * reach / (cell * cell) + 1) continue;
-          const slot = this.findSlot(cx + ox, gy, key, head, size);
-          let j = slot < 0 ? -1 : head[slot];
+        for (let ox = -1; ox <= 1; ox++) {
+          const gx = cx + ox;
+          let j = head[hashCell(gx, gy) & mask];
           while (j !== -1) {
-            if (j !== i) {
+            if (j !== i && cellX[j] === gx && cellY[j] === gy) {
               const rj = radius[j] || baseRadius;
               const rr = ri + rj;
               let dx = xi - (pos[j * 2] + vx[j]);
               let dy = yi - (pos[j * 2 + 1] + vy[j]);
-              let d = Math.sqrt(dx * dx + dy * dy);
+              const d2 = dx * dx + dy * dy;
+              let d = d2 < rr * rr ? Math.sqrt(d2) : rr;
               if (d < 1e-6) {
                 dx = jitter(i * 31 + j);
                 dy = jitter(i * 17 + j + 5);
@@ -339,43 +348,6 @@ export class SimulationCore {
         }
       }
     }
-  }
-
-  private slotFor(
-    x: number,
-    y: number,
-    cell: number,
-    key: Int32Array,
-    head: Int32Array,
-    size: number,
-  ): number {
-    const cx = Math.floor(x / cell);
-    const cy = Math.floor(y / cell);
-    return this.findSlot(cx, cy, key, head, size, true);
-  }
-
-  private findSlot(
-    cx: number,
-    cy: number,
-    key: Int32Array,
-    head: Int32Array,
-    size: number,
-    insert = false,
-  ): number {
-    const want = hashCell(cx, cy);
-    let idx = (want ^ (want >>> 7)) & (size - 1);
-    for (let probe = 0; probe < 32; probe++) {
-      const at = key[idx];
-      if (at === -1) {
-        if (!insert) return -1;
-        key[idx] = want;
-        head[idx] = -1;
-        return idx;
-      }
-      if (at === want) return idx;
-      idx = (idx + 1) & (size - 1);
-    }
-    return -1;
   }
 }
 

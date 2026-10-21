@@ -1,12 +1,17 @@
 // Minimal CDP driver for the Obsidian renderer (Node 22+, native WebSocket).
 // Usage:
-//   node tools/obs-probe.mjs '<js expression>'            -> evaluate and print
-//   node tools/obs-probe.mjs --file tools/measure.js       -> evaluate a file body
-//   node tools/obs-probe.mjs --await '<js promise expr>'   -> awaitPromise
+//   node tools/obs-cdp.mjs '<js expression>'            -> evaluate and print
+//   node tools/obs-cdp.mjs --file tools/measure.js       -> evaluate a file body
+//   node tools/obs-cdp.mjs --await '<js promise expr>'   -> awaitPromise
 import fs from 'node:fs';
 import { execFile } from 'node:child_process';
 
-const PORT = process.env.OBS_CDP_PORT ?? '9223';
+const rawPort = Number.parseInt(process.env.OBS_CDP_PORT ?? '9223', 10);
+if (!Number.isInteger(rawPort) || rawPort < 1 || rawPort > 65535) {
+  console.error('Invalid OBS_CDP_PORT');
+  process.exit(2);
+}
+const PORT = String(rawPort);
 
 const args = process.argv.slice(2);
 let awaitPromise = false;
@@ -28,7 +33,7 @@ for (let i = 0; i < args.length; i++) {
   else if (args[i] === '--shot') shotPath = args[++i];
   else if (args[i] === '--pull') pull = [args[++i], args[++i]];
   else if (args[i] === '--drive') drive = new URL(args[++i], `file://${process.cwd()}/`).href;
-  else if (args[i] === '--file') exprSource = fs.readFileSync(args[i + 1], 'utf8');
+  else if (args[i] === '--file') exprSource = fs.readFileSync(args[++i], 'utf8');
   else if (!exprSource) exprSource = args[i];
 }
 if (!exprSource && !shotPath && !pull && !drive) {
@@ -211,15 +216,20 @@ if (drive) {
       await sleep(o.waitMs ?? 80);
       return 'trusted mouseWheel';
     } catch {
+      const nx = Number(x) || 0;
+      const ny = Number(y) || 0;
+      const ndy = Number(deltaY) || 0;
+      const ndx = Number(o.deltaX ?? 0) || 0;
+      const nmode = Number(o.deltaMode ?? 0) || 0;
       const res = await evalJs(`(function () {
-        const el = document.elementFromPoint(${x}, ${y});
+        const el = document.elementFromPoint(${nx}, ${ny});
         if (!el) return 'no element at point';
         const evt = new WheelEvent('wheel', {
-          deltaY: ${deltaY},
-          deltaX: ${o.deltaX ?? 0},
-          deltaMode: ${o.deltaMode ?? 0},
-          clientX: ${x},
-          clientY: ${y},
+          deltaY: ${ndy},
+          deltaX: ${ndx},
+          deltaMode: ${nmode},
+          clientX: ${nx},
+          clientY: ${ny},
           bubbles: true,
           cancelable: true,
         });

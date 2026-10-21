@@ -111,7 +111,7 @@ let revisionCounter = 0;
  */
 export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
   const started = performance.now();
-  const back = new BackIndex(raw);
+  const back = BackIndex.for(raw);
   const filter = new GraphQuery(options.filterText, raw, back);
   const folderCount = raw.folders.length;
 
@@ -332,11 +332,9 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
 
   const clusterNodeOf = new Int32Array(folderCount).fill(-1);
   const overflowNodeOf = new Int32Array(folderCount).fill(-1);
-  const slotByNode = new Map<number, number>();
   for (let s = 0; s < slots.length; s++) {
     const slot = slots[s];
     slot.nodeId = addNode(NodeKind.Cluster, -1, s, slot.folderId, clusterLabel(raw, slot), slot.meta.folder);
-    slotByNode.set(slot.nodeId, s);
     if (slot.overflow) overflowNodeOf[slot.folderId] = slot.nodeId;
     else clusterNodeOf[slot.folderId] = slot.nodeId;
   }
@@ -397,19 +395,17 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
   const tagRep = new Int32Array(raw.tagNames.length).fill(-1);
   const overflowCounts: { kind: number; count: number }[] = [];
   if (options.showTags) {
-    const usage = new Map<number, number>();
+    const usage = new Int32Array(raw.tagNames.length);
     for (let e = 0; e < raw.ts.length; e++) {
       if (!active[raw.ts[e]]) continue;
-      const t = raw.tt[e];
-      usage.set(t, (usage.get(t) ?? 0) + 1);
+      usage[raw.tt[e]]++;
     }
-    const order = raw.tagNames
-      .map((_, t) => t)
-      .filter((t) => {
-        const uses = usage.get(t) ?? 0;
-        return uses > 0 && uses >= options.minTagUses;
-      })
-      .sort((a, b) => (usage.get(b) ?? 0) - (usage.get(a) ?? 0));
+    const minUses = Math.max(1, options.minTagUses);
+    const order: number[] = [];
+    for (let t = 0; t < raw.tagNames.length; t++) {
+      if (usage[t] >= minUses) order.push(t);
+    }
+    order.sort((a, b) => usage[b] - usage[a]);
     const keep = order.slice(0, options.maxNonFileNodes);
     if (order.length > keep.length) overflowCounts.push({ kind: NodeKind.Tag, count: order.length - keep.length });
     for (const t of keep) tagRep[t] = addNode(NodeKind.Tag, -1, -1, -1, raw.tagNames[t], null);
@@ -417,16 +413,16 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
 
   const unresRep = new Int32Array(raw.unresolvedNames.length).fill(-1);
   if (options.showUnresolved) {
-    const usage = new Map<number, number>();
+    const usage = new Float32Array(raw.unresolvedNames.length);
     for (let e = 0; e < raw.us.length; e++) {
       if (!active[raw.us[e]]) continue;
-      const t = raw.ut[e];
-      usage.set(t, (usage.get(t) ?? 0) + raw.uw[e]);
+      usage[raw.ut[e]] += raw.uw[e];
     }
-    const order = raw.unresolvedNames
-      .map((_, u) => u)
-      .filter((u) => (usage.get(u) ?? 0) > 0)
-      .sort((a, b) => (usage.get(b) ?? 0) - (usage.get(a) ?? 0));
+    const order: number[] = [];
+    for (let u = 0; u < raw.unresolvedNames.length; u++) {
+      if (usage[u] > 0) order.push(u);
+    }
+    order.sort((a, b) => usage[b] - usage[a]);
     const keep = order.slice(0, options.maxNonFileNodes);
     if (order.length > keep.length) overflowCounts.push({ kind: NodeKind.Unresolved, count: order.length - keep.length });
     for (const u of keep) unresRep[u] = addNode(NodeKind.Unresolved, -1, -1, -1, raw.unresolvedNames[u], null);
@@ -439,8 +435,8 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
   const addEdge = (a: number, b: number, weight: number, kind: number): void => {
     if (a < 0 || b < 0) return;
     if (a === b) {
-      const slot = slotByNode.get(a);
-      if (slot !== undefined) slots[slot].meta.internalLinks += weight;
+      const slot = nodeSlot[a];
+      if (slot >= 0) slots[slot].meta.internalLinks += weight;
       return;
     }
     const key = a * nodeTotal + b;
@@ -473,8 +469,8 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
     if (target < 0) continue;
     const a = repOfFile[s];
     if (a < 0) continue;
-    const slotIdx = slotByNode.get(a);
-    if (slotIdx !== undefined) {
+    const slotIdx = nodeSlot[a];
+    if (slotIdx >= 0) {
       const dedupe = a * raw.tagNames.length + t;
       if (seenTagEdge.has(dedupe)) continue;
       seenTagEdge.add(dedupe);
@@ -488,8 +484,10 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
   const score = (i: number) => raw.outWeight[i] + raw.inWeight[i];
   for (let i = 0; i < raw.fileCount; i++) {
     if (!active[i]) continue;
-    const slotIdx = slotByNode.get(repOfFile[i]);
-    if (slotIdx === undefined) continue;
+    const rep = repOfFile[i];
+    if (rep < 0) continue;
+    const slotIdx = nodeSlot[rep];
+    if (slotIdx < 0) continue;
     const slot = slots[slotIdx];
     const s = score(i);
     const top = slot.top;
@@ -518,9 +516,8 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
         .map(([t, count]) => ({ tag: raw.tagNames[t], count }));
     }
     slot.meta.label = clusterLabel(raw, slot);
+    labels[slot.nodeId] = slot.meta.label;
   }
-  // labels were computed before metadata; refresh the cluster node labels
-  for (const [nodeId, slotIdx] of slotByNode) labels[nodeId] = clusterLabel(raw, slots[slotIdx]);
 
   // ---- 9. flush bundles --------------------------------------------------
   const eu: number[] = [];
@@ -537,22 +534,46 @@ export function buildGraph(raw: RawGraph, options: BuildOptions): BuildResult {
     ew.push(b.w);
     ek.push(aggregate ? b.k | EdgeKind.Aggregate : b.k);
     if (aggregate) {
-      const from = slotByNode.get(a);
-      const to = slotByNode.get(c);
-      if (from !== undefined) slots[from].meta.outWeight += b.w;
-      if (to !== undefined) slots[to].meta.inWeight += b.w;
+      const from = nodeSlot[a];
+      const to = nodeSlot[c];
+      if (from >= 0) slots[from].meta.outWeight += b.w;
+      if (to >= 0) slots[to].meta.inWeight += b.w;
     }
   }
 
   // ---- 10. colour groups ---------------------------------------------------
   const group = new Int32Array(nodeTotal).fill(-1);
-  const groupQueries = options.colorGroups.map((g) => new GraphQuery(g.query, raw, back));
-  for (let i = 0; i < nodeTotal; i++) {
-    const ctx = nodeContext(raw, i, nodeKind, nodeFileId, nodeFolder, labels, paths, slots, slotByNode);
-    for (let g = 0; g < groupQueries.length; g++) {
-      if (groupQueries[g].matchNode(ctx)) {
-        group[i] = g;
-        break;
+  if (options.colorGroups.length > 0) {
+    const activeGroups: { index: number; query: GraphQuery }[] = [];
+    for (let g = 0; g < options.colorGroups.length; g++) {
+      const q = new GraphQuery(options.colorGroups[g].query, raw, back);
+      if (!q.empty) activeGroups.push({ index: g, query: q });
+    }
+    if (activeGroups.length > 0) {
+      const slotTags = slots.map((s) => s.meta.topTags.map((t) => t.tag));
+      const ctx = {
+        fileId: -1,
+        kind: 0,
+        label: '',
+        path: null as string | null,
+        folder: '',
+        tags: undefined as string[] | undefined,
+      };
+      for (let i = 0; i < nodeTotal; i++) {
+        const slotIdx = nodeSlot[i];
+        const folderIndex = nodeFolder[i];
+        ctx.fileId = nodeFileId[i];
+        ctx.kind = nodeKind[i];
+        ctx.label = labels[i];
+        ctx.path = paths[i];
+        ctx.folder = folderIndex >= 0 && folderIndex < raw.folders.length ? raw.folders[folderIndex] : '';
+        ctx.tags = slotIdx >= 0 ? slotTags[slotIdx] : undefined;
+        for (let g = 0; g < activeGroups.length; g++) {
+          if (activeGroups[g].query.matchNode(ctx)) {
+            group[i] = activeGroups[g].index;
+            break;
+          }
+        }
       }
     }
   }
@@ -766,6 +787,7 @@ function clusterLabel(raw: RawGraph, slot: Slot): string {
 
 function parentFolder(raw: RawGraph, i: number): number {
   if (i <= 0) return -1;
+  if (raw.folderParent && i < raw.folderParent.length) return raw.folderParent[i];
   const path = raw.folders[i];
   const cut = path.lastIndexOf('/');
   return raw.folderIndex.get(cut < 0 ? '' : path.slice(0, cut)) ?? -1;
@@ -777,29 +799,6 @@ function childFoldersWithData(raw: RawGraph, i: number, subtreeActive: Int32Arra
     if (subtreeActive[raw.folderChildren[k]] > 0) count++;
   }
   return count;
-}
-
-function nodeContext(
-  raw: RawGraph,
-  i: number,
-  nodeKind: number[],
-  nodeFileId: number[],
-  nodeFolder: number[],
-  labels: string[],
-  paths: (string | null)[],
-  slots: Slot[],
-  slotByNode: Map<number, number>,
-) {
-  const slotIdx = slotByNode.get(i);
-  const folderIndex = nodeFolder[i];
-  return {
-    fileId: nodeFileId[i],
-    kind: nodeKind[i],
-    label: labels[i],
-    path: paths[i],
-    folder: folderIndex >= 0 && folderIndex < raw.folders.length ? raw.folders[folderIndex] : '',
-    tags: slotIdx !== undefined ? slots[slotIdx].meta.topTags.map((t) => t.tag) : undefined,
-  };
 }
 
 interface Directed {

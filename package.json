@@ -3,11 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "description": "WebGL, worker-simulated drop-in replacement for the Obsidian graph view that aggregates large folders into metadata nodes.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
   "scripts": {
     "build": "node esbuild.config.mjs production && tsc -noEmit -skipLibCheck",
     "dev": "node esbuild.config.mjs",
     "watch": "node esbuild.config.mjs production --watch",
-    "typecheck": "tsc -noEmit -skipLibCheck"
+    "typecheck": "tsc -noEmit -skipLibCheck",
+    "test": "node --test tests/run.mjs",
+    "deploy": "node tools/deploy.mjs",
+    "dev:vault": "node tools/dev-vault.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

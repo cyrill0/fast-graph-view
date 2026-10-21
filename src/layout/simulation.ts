@@ -34,6 +34,7 @@ export class SimulationDriver {
   private config: ForceConfig = { ...DEFAULT_FORCE_CONFIG };
   private options: DriverOptions;
   private pendingInit: InitMessage | null = null;
+  private lastInit: InitMessage | null = null;
   private destroyed = false;
 
   constructor(options: DriverOptions) {
@@ -74,12 +75,19 @@ export class SimulationDriver {
   }
 
   private useInline(reason: string): void {
-    this.worker = null;
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
+    }
+    if (this.workerUrl) {
+      URL.revokeObjectURL(this.workerUrl);
+      this.workerUrl = null;
+    }
     this.inline = new SimulationCore();
     this.options.onFallback?.(reason);
-    if (this.pendingInit) {
-      const msg = this.pendingInit;
-      this.pendingInit = null;
+    const msg = this.pendingInit ?? this.lastInit;
+    this.pendingInit = null;
+    if (msg) {
       this.startInline(msg);
     }
   }
@@ -138,6 +146,16 @@ export class SimulationDriver {
    */
   update(model: GraphModel, radius: Float32Array, alpha = ALPHA_START): void {
     this.revision = model.revision;
+    this.lastInit = {
+      type: "init",
+      revision: model.revision,
+      pos: model.pos.slice(),
+      eu: model.eu.slice(),
+      ev: model.ev.slice(),
+      radius: radius.slice(),
+      config: { ...this.config },
+      alpha,
+    };
     const msg: InitMessage = {
       type: "init",
       revision: model.revision,
@@ -234,5 +252,7 @@ export class SimulationDriver {
       this.workerUrl = null;
     }
     this.inline = null;
+    this.pendingInit = null;
+    this.lastInit = null;
   }
 }

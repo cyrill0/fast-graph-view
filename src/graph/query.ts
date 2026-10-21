@@ -24,9 +24,19 @@ export interface MatchContext {
   tags?: string[];
 }
 
+const MAX_TOKENS = 256;
+const MAX_PARSE_DEPTH = 32;
+
 export class GraphQuery {
   private term: Term | null = null;
   private readonly raw: RawGraph;
+  private readonly scratchCtx: MatchContext = {
+    fileId: -1,
+    kind: NodeKind.File,
+    label: '',
+    path: null,
+    folder: '',
+  };
   readonly error: string | null;
   readonly usedTagFacts: boolean;
   readonly usedLinkFacts: boolean;
@@ -58,15 +68,15 @@ export class GraphQuery {
   matchFile(fileId: number): boolean {
     if (!this.term) return true;
     const raw = this.raw;
-    const path = raw.paths[fileId];
-    const cut = path.lastIndexOf('/');
-    return this.term({
-      fileId,
-      kind: raw.isMd[fileId] ? NodeKind.File : NodeKind.Attachment,
-      label: raw.names[fileId],
-      path,
-      folder: cut < 0 ? '' : path.slice(0, cut),
-    });
+    const folderIdx = raw.folderId[fileId];
+    const ctx = this.scratchCtx;
+    ctx.fileId = fileId;
+    ctx.kind = raw.isMd[fileId] ? NodeKind.File : NodeKind.Attachment;
+    ctx.label = raw.names[fileId];
+    ctx.path = raw.paths[fileId];
+    ctx.folder = folderIdx >= 0 && folderIdx < raw.folders.length ? raw.folders[folderIdx] : folderOf(raw.paths[fileId]);
+    ctx.tags = undefined;
+    return this.term(ctx);
   }
 
   matchNode(node: {
@@ -90,29 +100,54 @@ export class GraphQuery {
   }
 }
 
+const backIndexCache = new WeakMap<RawGraph, BackIndex>();
+
 /** reverse link index, built only when a query needs `backlink:` / `from:` */
 export class BackIndex {
-  private sources: Int32Array[] | null = null;
+  private inOff: Int32Array | null = null;
+  private inFrom: Int32Array | null = null;
 
   constructor(private readonly raw: RawGraph) {}
 
+  static for(raw: RawGraph): BackIndex {
+    let hit = backIndexCache.get(raw);
+    if (!hit) {
+      hit = new BackIndex(raw);
+      backIndexCache.set(raw, hit);
+    }
+    return hit;
+  }
+
   ensure(): void {
-    if (this.sources) return;
+    if (this.inOff) return;
     const n = this.raw.fileCount;
-    const lists: number[][] = new Array(n);
-    for (let i = 0; i < n; i++) lists[i] = [];
-    for (let e = 0; e < this.raw.es.length; e++) lists[this.raw.et[e]].push(this.raw.es[e]);
-    this.sources = lists.map((l) => Int32Array.from(l));
+    const m = this.raw.es.length;
+    const off = new Int32Array(n + 1);
+    for (let e = 0; e < m; e++) off[this.raw.et[e] + 1]++;
+    for (let i = 0; i < n; i++) off[i + 1] += off[i];
+    const from = new Int32Array(m);
+    const cursor = off.slice(0, n);
+    for (let e = 0; e < m; e++) {
+      const target = this.raw.et[e];
+      from[cursor[target]++] = this.raw.es[e];
+    }
+    this.inOff = off;
+    this.inFrom = from;
   }
 
   /** file ids linking *to* `fileId` */
   in(fileId: number): Int32Array {
     this.ensure();
-    return this.sources![fileId] ?? EMPTY_INT;
+    if (fileId < 0 || fileId >= this.raw.fileCount) return EMPTY_INT;
+    return this.inFrom!.subarray(this.inOff![fileId], this.inOff![fileId + 1]);
   }
 }
 
 const EMPTY_INT = new Int32Array(0);
+
+function isSpace(c: string): boolean {
+  return c === ' ' || c === '\t' || c === '\n' || c === '\r';
+}
 
 // ---- parser ---------------------------------------------------------------
 
@@ -125,8 +160,9 @@ function tokenize(src: string): Token[] {
   const out: Token[] = [];
   let i = 0;
   while (i < src.length) {
+    if (out.length >= MAX_TOKENS) throw new Error('query has too many terms');
     const c = src[i];
-    if (c === ' ' || c === '\t' || c === '\n') {
+    if (isSpace(c)) {
       i++;
       continue;
     }
@@ -147,7 +183,7 @@ function tokenize(src: string): Token[] {
     }
     // read a word, honouring quotes
     let word = '';
-    while (i < src.length && src[i] !== ' ' && src[i] !== '(' && src[i] !== ')') {
+    while (i < src.length && !isSpace(src[i]) && src[i] !== '(' && src[i] !== ')') {
       if (src[i] === '"') {
         i++;
         const start = i;
@@ -171,22 +207,24 @@ function tokenize(src: string): Token[] {
 /** recursive descent: sequence = AND, `or` binds looser than implicit AND */
 function parse(src: string, raw: RawGraph, back: BackIndex): Term {
   const tokens = tokenize(src);
+  if (tokens.length === 0) return () => true;
   let pos = 0;
 
   const peek = () => tokens[pos];
-  const parsePrimary = (): Term => {
+  const parsePrimary = (depth: number): Term => {
+    if (depth > MAX_PARSE_DEPTH) throw new Error('query is nested too deeply');
     const t = peek();
     if (!t) throw new Error('unexpected end of query');
     if (t.type === 'lparen') {
       pos++;
-      const inner = parseOr();
+      const inner = parseOr(depth + 1);
       if (peek()?.type === 'rparen') pos++;
       else throw new Error('missing )');
       return inner;
     }
     if (t.type === 'not') {
       pos++;
-      const inner = parsePrimary();
+      const inner = parsePrimary(depth + 1);
       return (ctx) => !inner(ctx);
     }
     if (t.type === 'rparen') throw new Error('unexpected )');
@@ -194,7 +232,7 @@ function parse(src: string, raw: RawGraph, back: BackIndex): Term {
     return leaf(t.value!, raw, back);
   };
 
-  const parseSequence = (): Term => {
+  const parseSequence = (depth: number): Term => {
     const parts: Term[] = [];
     while (pos < tokens.length) {
       const t = peek();
@@ -204,7 +242,7 @@ function parse(src: string, raw: RawGraph, back: BackIndex): Term {
         pos++;
         negate = true;
       }
-      const term = parsePrimary();
+      const term = parsePrimary(depth + 1);
       parts.push(negate ? (ctx) => !term(ctx) : term);
     }
     if (!parts.length) return () => true;
@@ -212,11 +250,12 @@ function parse(src: string, raw: RawGraph, back: BackIndex): Term {
     return (ctx) => parts.every((p) => p(ctx));
   };
 
-  const parseOr = (): Term => {
-    const branches: Term[] = [parseSequence()];
+  const parseOr = (depth: number): Term => {
+    const branches: Term[] = [parseSequence(depth)];
     while (peek()?.type === 'or') {
       pos++;
-      branches.push(parseSequence());
+      if (pos >= tokens.length || peek()?.type === 'rparen') break;
+      branches.push(parseSequence(depth));
     }
     if (branches.length === 1) return branches[0];
     return (ctx) => branches.some((b) => b(ctx));
@@ -224,7 +263,7 @@ function parse(src: string, raw: RawGraph, back: BackIndex): Term {
 
   // top level: implicit AND with `or` / `|` binding looser
   pos = 0;
-  const tree = parseOr();
+  const tree = parseOr(0);
   if (pos < tokens.length) throw new Error('unbalanced query');
   return tree;
 }
@@ -253,9 +292,20 @@ function atom(word: string, raw: RawGraph, back: BackIndex): Term {
     case 'path':
     case 'folder': {
       const needle = valueLower;
+      if (prefix === 'folder') {
+        return (ctx) => {
+          const folder =
+            ctx.fileId >= 0 && raw.lowerFolders[raw.folderId[ctx.fileId]] !== undefined
+              ? raw.lowerFolders[raw.folderId[ctx.fileId]]
+              : ctx.folder.toLowerCase();
+          return folder === needle || folder.startsWith(needle.endsWith('/') ? needle : needle + '/');
+        };
+      }
       return (ctx) => {
-        const hay = (ctx.path ?? ctx.label).toLowerCase();
-        if (prefix === 'folder') return folderOf(hay).startsWith(needle) || folderOf(hay) === needle;
+        const hay =
+          ctx.fileId >= 0 && raw.lowerPaths[ctx.fileId] !== undefined
+            ? raw.lowerPaths[ctx.fileId]
+            : (ctx.path ?? ctx.label).toLowerCase();
         return hay.includes(needle);
       };
     }
@@ -263,12 +313,18 @@ function atom(word: string, raw: RawGraph, back: BackIndex): Term {
     case 'name': {
       const needle = valueLower;
       return (ctx) => {
-        const base = baseName(ctx.path ?? ctx.label).toLowerCase();
+        const base =
+          ctx.fileId >= 0 && raw.lowerNames[ctx.fileId] !== undefined
+            ? raw.lowerNames[ctx.fileId]
+            : baseName(ctx.path ?? ctx.label).toLowerCase();
         return base.includes(needle);
       };
     }
     case 'ext':
-      return (ctx) => ctx.kind !== NodeKind.Cluster && extensionOf(ctx.path ?? ctx.label).toLowerCase() === valueLower;
+    {
+      const cleanExt = valueLower.startsWith('.') ? valueLower.slice(1) : valueLower;
+      return (ctx) => ctx.kind !== NodeKind.Cluster && extensionOf(ctx.path ?? ctx.label).toLowerCase() === cleanExt;
+    }
     case 'is': {
       switch (valueLower) {
         case 'orphan':
@@ -297,8 +353,12 @@ function atom(word: string, raw: RawGraph, back: BackIndex): Term {
       const needle = valueLower;
       return (ctx) => {
         if (ctx.fileId < 0) return false;
-        for (const s of back.in(ctx.fileId)) {
-          if (raw.paths[s].toLowerCase().includes(needle) || raw.names[s].toLowerCase().includes(needle)) return true;
+        const sources = back.in(ctx.fileId);
+        for (let i = 0; i < sources.length; i++) {
+          const s = sources[i];
+          const lp = raw.lowerPaths[s] ?? raw.paths[s].toLowerCase();
+          const ln = raw.lowerNames[s] ?? raw.names[s].toLowerCase();
+          if (lp.includes(needle) || ln.includes(needle)) return true;
         }
         return false;
       };
@@ -311,6 +371,12 @@ function atom(word: string, raw: RawGraph, back: BackIndex): Term {
 
   const needle = lowered;
   return (ctx) => {
+    if (ctx.fileId >= 0) {
+      const ln = raw.lowerNames[ctx.fileId] ?? ctx.label.toLowerCase();
+      if (ln.includes(needle)) return true;
+      const lp = raw.lowerPaths[ctx.fileId] ?? (ctx.path ? ctx.path.toLowerCase() : '');
+      return lp.includes(needle);
+    }
     if (ctx.label.toLowerCase().includes(needle)) return true;
     if (ctx.path && ctx.path.toLowerCase().includes(needle)) return true;
     return false;
@@ -360,10 +426,14 @@ function hasOutgoingMatch(raw: RawGraph, fileId: number, needle: string): boolea
   const o = outgoing(raw);
   for (let k = o.linkOff[fileId]; k < o.linkOff[fileId + 1]; k++) {
     const t = o.linkTo[k];
-    if (raw.paths[t].toLowerCase().includes(needle) || raw.names[t].toLowerCase().includes(needle)) return true;
+    const lp = raw.lowerPaths[t] ?? raw.paths[t].toLowerCase();
+    const ln = raw.lowerNames[t] ?? raw.names[t].toLowerCase();
+    if (lp.includes(needle) || ln.includes(needle)) return true;
   }
   for (let k = o.unresOff[fileId]; k < o.unresOff[fileId + 1]; k++) {
-    if (raw.unresolvedNames[o.unresTo[k]].toLowerCase().includes(needle)) return true;
+    const u = o.unresTo[k];
+    const lu = raw.lowerUnresolvedNames[u] ?? raw.unresolvedNames[u].toLowerCase();
+    if (lu.includes(needle)) return true;
   }
   return false;
 }
@@ -371,15 +441,22 @@ function hasOutgoingMatch(raw: RawGraph, fileId: number, needle: string): boolea
 /** `tag:#x` - matches tag nodes, a file's own tags, and a cluster's aggregated tags */
 function tagTerm(raw: string, graph: RawGraph): Term {
   const needle = raw.toLowerCase();
+  const prefix = needle + '/';
   const hits = (name: string): boolean => {
     const lower = name.toLowerCase();
-    return lower === needle || lower.startsWith(needle + '/');
+    return lower === needle || lower.startsWith(prefix);
   };
+  const tagCount = graph.tagNames.length;
+  const matchedTag = new Uint8Array(tagCount);
+  for (let t = 0; t < tagCount; t++) {
+    const lower = graph.lowerTagNames[t] ?? graph.tagNames[t].toLowerCase();
+    if (lower === needle || lower.startsWith(prefix)) matchedTag[t] = 1;
+  }
   return (ctx) => {
     if (ctx.kind === NodeKind.Tag) return hits(ctx.label);
     if (ctx.fileId >= 0) {
       for (let k = graph.fileTagOff[ctx.fileId]; k < graph.fileTagOff[ctx.fileId + 1]; k++) {
-        if (hits(graph.tagNames[graph.fileTagId[k]])) return true;
+        if (matchedTag[graph.fileTagId[k]] === 1) return true;
       }
       return false;
     }

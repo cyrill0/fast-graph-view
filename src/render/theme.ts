@@ -50,6 +50,7 @@ export class ThemeReader {
   private probe: HTMLDivElement;
   private children = new Map<string, HTMLElement>();
   colors: GraphColors = emptyColors();
+  textCss = "rgba(136, 136, 136, 1)";
 
   constructor(host: Element) {
     const probe = document.createElement("div");
@@ -68,11 +69,13 @@ export class ThemeReader {
       out[key] = parseColor(el.color, el.opacity) ?? FALLBACK;
     }
     this.colors = out;
+    const t = out.text;
+    this.textCss = `rgba(${Math.round(t.r * 255)}, ${Math.round(t.g * 255)}, ${Math.round(t.b * 255)}, ${t.a})`;
   }
 
   destroy(): void {
     this.children.clear();
-    this.probe.parentElement?.remove();
+    this.probe.remove();
   }
 
   private getProbeChild(cls: string, parentStyle: CSSStyleDeclaration): { color: string; opacity: string } {

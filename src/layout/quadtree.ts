@@ -85,6 +85,9 @@ export class BarnesHut {
     this.child = child;
     this.head = head;
     this.capacity = nextCapacity;
+    if (this.stack.length < nextCapacity) {
+      this.stack = new Int32Array(nextCapacity);
+    }
   }
 
   private alloc(x0: number, y0: number, x1: number, y1: number): number {
@@ -205,44 +208,51 @@ export class BarnesHut {
   private foldUp(): void {
     const pos = this.pos!;
     const charge = this.charge!;
+    const child = this.child;
+    const head = this.head;
+    const next = this.next;
+    const mass = this.mass;
+    const cx = this.cx;
+    const cy = this.cy;
+    const value = this.value;
     for (let id = this.used - 1; id >= 0; id--) {
-      if (this.child[id] !== -1) {
-        const base = this.child[id];
+      const base = child[id];
+      if (base !== -1) {
         let m = 0;
         let sx = 0;
         let sy = 0;
         let v = 0;
         for (let k = 0; k < 4; k++) {
           const c = base + k;
-          const cm = this.mass[c];
+          const cm = mass[c];
           if (!cm) continue;
           m += cm;
-          sx += this.cx[c] * cm;
-          sy += this.cy[c] * cm;
-          v += this.value[c];
+          sx += cx[c] * cm;
+          sy += cy[c] * cm;
+          v += value[c];
         }
-        this.mass[id] = m;
-        this.cx[id] = m ? sx / m : 0;
-        this.cy[id] = m ? sy / m : 0;
-        this.value[id] = v;
+        mass[id] = m;
+        cx[id] = m ? sx / m : 0;
+        cy[id] = m ? sy / m : 0;
+        value[id] = v;
         continue;
       }
       let m = 0;
       let sx = 0;
       let sy = 0;
       let v = 0;
-      let p = this.head[id];
+      let p = head[id];
       while (p !== -1) {
         m++;
         sx += pos[p * 2];
         sy += pos[p * 2 + 1];
         v += charge[p];
-        p = this.next[p];
+        p = next[p];
       }
-      this.mass[id] = m;
-      this.cx[id] = m ? sx / m : 0;
-      this.cy[id] = m ? sy / m : 0;
-      this.value[id] = v;
+      mass[id] = m;
+      cx[id] = m ? sx / m : 0;
+      cy[id] = m ? sy / m : 0;
+      value[id] = v;
     }
   }
 
@@ -261,18 +271,29 @@ export class BarnesHut {
     const charge = this.charge!;
     const count = this.countHint;
     const stack = this.stack;
+    const stackLen = stack.length;
+    const child = this.child;
+    const head = this.head;
+    const next = this.next;
+    const mass = this.mass;
+    const cx = this.cx;
+    const cy = this.cy;
+    const value = this.value;
+    const x0 = this.x0;
+    const x1 = this.x1;
+    const root = this.root;
     for (let i = 0; i < count; i++) {
       const px = pos[i * 2];
       const py = pos[i * 2 + 1];
       if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
       let top = 0;
-      stack[top++] = this.root;
+      stack[top++] = root;
       while (top > 0) {
         const cell = stack[--top];
-        if (this.mass[cell] === 0) continue;
-        const isLeaf = this.child[cell] === -1;
-        if (isLeaf) {
-          let p = this.head[cell];
+        if (mass[cell] === 0) continue;
+        const base = child[cell];
+        if (base === -1) {
+          let p = head[cell];
           while (p !== -1) {
             if (p !== i) {
               const ox = pos[p * 2] - px;
@@ -284,22 +305,21 @@ export class BarnesHut {
                 vy[i] += oy * w;
               }
             }
-            p = this.next[p];
+            p = next[p];
           }
           continue;
         }
-        const dx = this.cx[cell] - px;
-        const dy = this.cy[cell] - py;
+        const dx = cx[cell] - px;
+        const dy = cy[cell] - py;
         const l = dx * dx + dy * dy;
-        const width = this.x1[cell] - this.x0[cell];
+        const width = x1[cell] - x0[cell];
         if (l > 0 && (width * width) / l < theta2) {
-          const w = (this.value[cell] * alpha) / l;
+          const w = (value[cell] * alpha) / l;
           vx[i] += dx * w;
           vy[i] += dy * w;
           continue;
         }
-        if (top + 4 > stack.length) continue;
-        const base = this.child[cell];
+        if (top + 4 > stackLen) continue;
         stack[top++] = base;
         stack[top++] = base + 1;
         stack[top++] = base + 2;

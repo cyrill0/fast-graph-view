@@ -1,8 +1,6 @@
 import type { App, TFile } from 'obsidian';
 import { EdgeKind } from './types';
 
-const EMPTY: number[] = [];
-
 /**
  * Flat, cache-shaped view of the vault's link graph.
  *
@@ -15,6 +13,8 @@ export class RawGraph {
   paths: string[] = [];
   /** basename without extension, same order as `paths` */
   names: string[] = [];
+  lowerPaths: string[] = [];
+  lowerNames: string[] = [];
   pathIndex = new Map<string, number>();
   isMd: Uint8Array = new Uint8Array(0);
   /** byte size per file, kept as cluster/node metadata */
@@ -23,9 +23,12 @@ export class RawGraph {
   dateRank: Int32Array = new Int32Array(0);
 
   folders: string[] = [];
+  lowerFolders: string[] = [];
   folderIndex = new Map<string, number>();
   /** folder id per file */
   folderId: Int32Array = new Int32Array(0);
+  /** parent folder id per folder (-1 for root) */
+  folderParent: Int32Array = new Int32Array(0);
   /** files sitting directly inside each folder */
   folderDirectFiles: Int32Array = new Int32Array(0);
   /** files inside each folder subtree */
@@ -42,6 +45,7 @@ export class RawGraph {
 
   /** unresolved link node names + file -> unresolved edges */
   unresolvedNames: string[] = [];
+  lowerUnresolvedNames: string[] = [];
   unresolvedIndex = new Map<string, number>();
   us: Int32Array = new Int32Array(0);
   ut: Int32Array = new Int32Array(0);
@@ -49,6 +53,7 @@ export class RawGraph {
 
   /** tag node names + file -> tag edges */
   tagNames: string[] = [];
+  lowerTagNames: string[] = [];
   tagIndex = new Map<string, number>();
   ts: Int32Array = new Int32Array(0);
   tt: Int32Array = new Int32Array(0);
@@ -93,13 +98,21 @@ export class RawGraph {
     const folders = [...folderSet].sort(
       (a, b) => depth(a) - depth(b) || (a < b ? -1 : a > b ? 1 : 0),
     );
+    const folderCount = folders.length;
+    const lowerFolders = new Array<string>(folderCount);
     const folderIndex = new Map<string, number>();
-    folders.forEach((f, i) => folderIndex.set(f, i));
-    const folderDirect = new Int32Array(folders.length);
+    for (let i = 0; i < folderCount; i++) {
+      const f = folders[i];
+      folderIndex.set(f, i);
+      lowerFolders[i] = f.toLowerCase();
+    }
+    const folderDirect = new Int32Array(folderCount);
 
     // ---- files ------------------------------------------------------------
     const paths = new Array<string>(files.length);
     const names = new Array<string>(files.length);
+    const lowerPaths = new Array<string>(files.length);
+    const lowerNames = new Array<string>(files.length);
     const isMd = new Uint8Array(files.length);
     const sizes = new Float32Array(files.length);
     const fileIdOfFolder = new Int32Array(files.length);
@@ -111,6 +124,8 @@ export class RawGraph {
       const f = files[i];
       paths[i] = f.path;
       names[i] = f.basename;
+      lowerPaths[i] = f.path.toLowerCase();
+      lowerNames[i] = f.basename.toLowerCase();
       isMd[i] = f.extension === 'md' ? 1 : 0;
       sizes[i] = f.stat?.size ?? 0;
       const stat = f.stat;
@@ -127,30 +142,29 @@ export class RawGraph {
     order.sort((a, b) => dates[a] - dates[b] || a - b);
     for (let rank = 0; rank < order.length; rank++) dateRank[order[rank]] = rank;
 
-    // ---- folder subtree sizes and child lists -----------------------------
-    const folderAll = folderDirect.slice();
-    for (let i = folders.length - 1; i > 0; i--) {
+    // ---- folder parents, subtree sizes, and CSR child lists ---------------
+    const folderParent = new Int32Array(folderCount).fill(-1);
+    const folderChildOff = new Int32Array(folderCount + 1);
+    for (let i = 1; i < folderCount; i++) {
       const parent = parentOf(folders, i, folderIndex);
+      folderParent[i] = parent;
+      if (parent >= 0) folderChildOff[parent + 1]++;
+    }
+    const folderAll = folderDirect.slice();
+    for (let i = folderCount - 1; i > 0; i--) {
+      const parent = folderParent[i];
       if (parent >= 0) folderAll[parent] += folderAll[i];
     }
-    const childLists: number[][] = new Array(folders.length);
-    for (let i = 0; i < folders.length; i++) childLists[i] = [];
-    for (let i = 1; i < folders.length; i++) {
-      const parent = parentOf(folders, i, folderIndex);
-      if (parent >= 0) childLists[parent].push(i);
+    for (let i = 0; i < folderCount; i++) {
+      folderChildOff[i + 1] += folderChildOff[i];
     }
-    const folderChildOff = new Int32Array(folders.length + 1);
-    let childTotal = 0;
-    for (let i = 0; i < folders.length; i++) {
-      folderChildOff[i] = childTotal;
-      childTotal += childLists[i].length;
-    }
-    folderChildOff[folders.length] = childTotal;
-    const folderChildren = new Int32Array(childTotal);
+    const folderChildren = new Int32Array(folderChildOff[folderCount]);
     {
-      let k = 0;
-      for (let i = 0; i < folders.length; i++)
-        for (const c of childLists[i]) folderChildren[k++] = c;
+      const cursor = folderChildOff.slice(0, folderCount);
+      for (let i = 1; i < folderCount; i++) {
+        const parent = folderParent[i];
+        if (parent >= 0) folderChildren[cursor[parent]++] = i;
+      }
     }
 
     // ---- file -> file edges ------------------------------------------------
@@ -163,10 +177,13 @@ export class RawGraph {
 
     const resolved = cache.resolvedLinks as Record<string, Record<string, number>>;
     for (const srcPath in resolved) {
+      if (!Object.prototype.hasOwnProperty.call(resolved, srcPath)) continue;
       const s = pathIndex.get(srcPath);
       if (s === undefined) continue;
       const targets = resolved[srcPath];
+      if (!targets || typeof targets !== 'object') continue;
       for (const dstPath in targets) {
+        if (!Object.prototype.hasOwnProperty.call(targets, dstPath)) continue;
         const t = pathIndex.get(dstPath);
         if (t === undefined) continue;
         const w = targets[dstPath] > 0 ? targets[dstPath] : 1;
@@ -185,12 +202,16 @@ export class RawGraph {
     const utArr: number[] = [];
     const uwArr: number[] = [];
     const unresNames: string[] = [];
+    const lowerUnresNames: string[] = [];
     const unresIndex = new Map<string, number>();
     for (const srcPath in unresolved) {
+      if (!Object.prototype.hasOwnProperty.call(unresolved, srcPath)) continue;
       const s = pathIndex.get(srcPath);
       if (s === undefined) continue;
       const targets = unresolved[srcPath];
+      if (!targets || typeof targets !== 'object') continue;
       for (const key in targets) {
+        if (!Object.prototype.hasOwnProperty.call(targets, key)) continue;
         if (!key) continue;
         const w = targets[key] > 0 ? targets[key] : 1;
         let u = unresIndex.get(key);
@@ -198,6 +219,7 @@ export class RawGraph {
           u = unresNames.length;
           unresIndex.set(key, u);
           unresNames.push(key);
+          lowerUnresNames.push(key.toLowerCase());
         }
         usArr.push(s);
         utArr.push(u);
@@ -208,69 +230,71 @@ export class RawGraph {
 
     // ---- tags ---------------------------------------------------------------
     const tagNames: string[] = [];
+    const lowerTagNames: string[] = [];
     const tagIndex = new Map<string, number>();
     const tsArr: number[] = [];
     const ttArr: number[] = [];
-    const perFileTags: number[][] = new Array(files.length);
+    const fileTagOff = new Int32Array(files.length + 1);
+    const rawTags: string[] = [];
     for (let i = 0; i < files.length; i++) {
+      fileTagOff[i] = ttArr.length;
       const c = cache.getFileCache(files[i]);
-      if (!c) {
-        perFileTags[i] = EMPTY;
-        continue;
+      if (!c) continue;
+      rawTags.length = 0;
+      if (c.tags) {
+        for (let k = 0; k < c.tags.length; k++) {
+          const tag = c.tags[k].tag;
+          if (tag) rawTags.push(tag);
+        }
       }
-      const raw: string[] = [];
-      if (c.tags) for (const t of c.tags) if (t.tag) raw.push(t.tag);
       const fm = c.frontmatter as Record<string, unknown> | undefined;
       if (fm) {
-        pushTagValues(fm['tag'], raw);
-        pushTagValues(fm['tags'], raw);
+        pushTagValues(fm['tag'], rawTags);
+        pushTagValues(fm['tags'], rawTags);
       }
-      if (!raw.length) {
-        perFileTags[i] = EMPTY;
-        continue;
-      }
-      const ids: number[] = [];
-      const seen = new Set<string>();
-      for (let r = 0; r < raw.length; r++) {
-        let name = raw[r];
-        if (name[0] !== '#') name = '#' + name;
-        if (seen.has(name)) continue;
-        seen.add(name);
+      if (rawTags.length === 0) continue;
+      const startOff = fileTagOff[i];
+      for (let r = 0; r < rawTags.length; r++) {
+        const rawTag = rawTags[r];
+        if (!rawTag) continue;
+        const name = rawTag.charCodeAt(0) === 35 ? rawTag : '#' + rawTag;
         let id = tagIndex.get(name);
         if (id === undefined) {
           id = tagNames.length;
           tagIndex.set(name, id);
           tagNames.push(name);
+          lowerTagNames.push(name.toLowerCase());
+        } else {
+          let dup = false;
+          for (let prev = startOff; prev < ttArr.length; prev++) {
+            if (ttArr[prev] === id) {
+              dup = true;
+              break;
+            }
+          }
+          if (dup) continue;
         }
-        ids.push(id);
         tsArr.push(i);
         ttArr.push(id);
       }
-      perFileTags[i] = ids;
     }
-    const fileTagOff = new Int32Array(files.length + 1);
-    let tagTotal = 0;
-    for (let i = 0; i < files.length; i++) {
-      fileTagOff[i] = tagTotal;
-      tagTotal += perFileTags[i].length;
-    }
-    fileTagOff[files.length] = tagTotal;
-    const fileTagId = new Int32Array(tagTotal);
-    {
-      let k = 0;
-      for (let i = 0; i < files.length; i++) for (const t of perFileTags[i]) fileTagId[k++] = t;
-    }
+    fileTagOff[files.length] = ttArr.length;
+    const ttTyped = Int32Array.from(ttArr);
 
     // ---- commit -------------------------------------------------------------
     g.paths = paths;
     g.names = names;
+    g.lowerPaths = lowerPaths;
+    g.lowerNames = lowerNames;
     g.pathIndex = pathIndex;
     g.isMd = isMd;
     g.sizes = sizes;
     g.dateRank = dateRank;
     g.folders = folders;
+    g.lowerFolders = lowerFolders;
     g.folderIndex = folderIndex;
     g.folderId = fileIdOfFolder;
+    g.folderParent = folderParent;
     g.folderDirectFiles = folderDirect;
     g.folderAllFiles = folderAll;
     g.folderChildOff = folderChildOff;
@@ -285,17 +309,19 @@ export class RawGraph {
     g.inWeight = inW;
 
     g.unresolvedNames = unresNames;
+    g.lowerUnresolvedNames = lowerUnresNames;
     g.unresolvedIndex = unresIndex;
     g.us = Int32Array.from(usArr);
     g.ut = Int32Array.from(utArr);
     g.uw = Float32Array.from(uwArr);
 
     g.tagNames = tagNames;
+    g.lowerTagNames = lowerTagNames;
     g.tagIndex = tagIndex;
     g.ts = Int32Array.from(tsArr);
-    g.tt = Int32Array.from(ttArr);
+    g.tt = ttTyped;
     g.fileTagOff = fileTagOff;
-    g.fileTagId = fileTagId;
+    g.fileTagId = ttTyped;
 
     const orphan = new Uint8Array(files.length);
     for (let i = 0; i < files.length; i++) if (outW[i] === 0 && inW[i] === 0) orphan[i] = 1;

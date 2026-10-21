@@ -19,5 +19,5 @@
     "types": ["node"],
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "esbuild.config.mjs"]
+  "include": ["src/**/*.ts", "tests/**/*.ts", "esbuild.config.mjs"]
 }

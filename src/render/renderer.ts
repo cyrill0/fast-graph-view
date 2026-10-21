@@ -69,6 +69,40 @@ interface DivisorApi {
   draw(mode: number, count: number, type: number, offset: number, instances: number): void;
 }
 
+interface CommonLocs {
+  uRes: WebGLUniformLocation | null;
+  uPan: WebGLUniformLocation | null;
+  uScale: WebGLUniformLocation | null;
+  uRadiusScale: WebGLUniformLocation | null;
+}
+
+interface NodeLocs extends CommonLocs {
+  uMode: WebGLUniformLocation | null;
+  uBand: WebGLUniformLocation | null;
+  uCenter: WebGLUniformLocation | null;
+  aCorner: number;
+  aOffset: number;
+  aSize: number;
+  aColor: number;
+}
+
+interface EdgeLocs extends CommonLocs {
+  uHalfWidth: WebGLUniformLocation | null;
+  aTC: number;
+  aA: number;
+  aB: number;
+  aRadii: number;
+  aColor: number;
+}
+
+interface ArrowLocs extends CommonLocs {
+  aShape: number;
+  aTip: number;
+  aDir: number;
+  aLen: number;
+  aColor: number;
+}
+
 export class GraphRenderer {
   readonly gl: WebGLRenderingContext;
   private canvas: HTMLCanvasElement;
@@ -76,6 +110,9 @@ export class GraphRenderer {
   private nodeProgram: WebGLProgram;
   private edgeProgram: WebGLProgram;
   private arrowProgram: WebGLProgram;
+  private nodeLocs: NodeLocs;
+  private edgeLocs: EdgeLocs;
+  private arrowLocs: ArrowLocs;
 
   private discBuffer: WebGLBuffer;
   private segmentBuffer: WebGLBuffer;
@@ -89,6 +126,7 @@ export class GraphRenderer {
   private nodeData = new Float32Array(0);
   private edgeData = new Float32Array(0);
   private arrowData = new Float32Array(0);
+  private ringData = new Float32Array(NODE_STRIDE);
   private nodeCapacity = 0;
   private edgeCapacity = 0;
   private arrowCapacity = 0;
@@ -96,12 +134,14 @@ export class GraphRenderer {
   framesRendered = 0;
   lastFrameMs = 0;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(canvas: HTMLCanvasElement, mobile = false) {
     this.canvas = canvas;
     const options: WebGLContextAttributes = {
       alpha: true,
       premultipliedAlpha: false,
-      antialias: true,
+      // MSAA costs a lot of fill and memory bandwidth on mobile GPUs. Nodes and
+      // lines are already shader-antialiased, so it is not needed there.
+      antialias: !mobile,
       preserveDrawingBuffer: false,
     };
     const gl =
@@ -114,6 +154,33 @@ export class GraphRenderer {
     this.nodeProgram = link(gl, NODE_VS, NODE_FS);
     this.edgeProgram = link(gl, EDGE_VS, EDGE_FS);
     this.arrowProgram = link(gl, ARROW_VS, ARROW_FS);
+    this.nodeLocs = {
+      ...commonLocs(gl, this.nodeProgram),
+      uMode: gl.getUniformLocation(this.nodeProgram, "uMode"),
+      uBand: gl.getUniformLocation(this.nodeProgram, "uBand"),
+      uCenter: gl.getUniformLocation(this.nodeProgram, "uCenter"),
+      aCorner: gl.getAttribLocation(this.nodeProgram, "aCorner"),
+      aOffset: gl.getAttribLocation(this.nodeProgram, "aOffset"),
+      aSize: gl.getAttribLocation(this.nodeProgram, "aSize"),
+      aColor: gl.getAttribLocation(this.nodeProgram, "aColor"),
+    };
+    this.edgeLocs = {
+      ...commonLocs(gl, this.edgeProgram),
+      uHalfWidth: gl.getUniformLocation(this.edgeProgram, "uHalfWidth"),
+      aTC: gl.getAttribLocation(this.edgeProgram, "aTC"),
+      aA: gl.getAttribLocation(this.edgeProgram, "aA"),
+      aB: gl.getAttribLocation(this.edgeProgram, "aB"),
+      aRadii: gl.getAttribLocation(this.edgeProgram, "aRadii"),
+      aColor: gl.getAttribLocation(this.edgeProgram, "aColor"),
+    };
+    this.arrowLocs = {
+      ...commonLocs(gl, this.arrowProgram),
+      aShape: gl.getAttribLocation(this.arrowProgram, "aShape"),
+      aTip: gl.getAttribLocation(this.arrowProgram, "aTip"),
+      aDir: gl.getAttribLocation(this.arrowProgram, "aDir"),
+      aLen: gl.getAttribLocation(this.arrowProgram, "aLen"),
+      aColor: gl.getAttribLocation(this.arrowProgram, "aColor"),
+    };
 
     this.discBuffer = staticBuffer(gl, DISC_CORNERS);
     this.segmentBuffer = staticBuffer(gl, SEGMENT_CORNERS);
@@ -122,7 +189,7 @@ export class GraphRenderer {
     this.nodeBuffer = dynamic(gl, 512 * NODE_STRIDE);
     this.edgeBuffer = dynamic(gl, 512 * EDGE_STRIDE);
     this.arrowBuffer = dynamic(gl, 512 * ARROW_STRIDE);
-    this.ringBuffer = gl.createBuffer() as WebGLBuffer;
+    this.ringBuffer = dynamic(gl, NODE_STRIDE);
 
     gl.disable(gl.DEPTH_TEST);
     gl.enable(gl.BLEND);
@@ -344,12 +411,12 @@ export class GraphRenderer {
 
   // ---------------------------------------------------------------- drawing
 
-  private commonUniforms(program: WebGLProgram, camera: CameraState, radiusScale: number): void {
+  private commonUniforms(locs: CommonLocs, camera: CameraState, radiusScale: number): void {
     const gl = this.gl;
-    gl.uniform2f(loc(gl, program, "uRes"), camera.width, camera.height);
-    gl.uniform2f(loc(gl, program, "uPan"), camera.panX, camera.panY);
-    gl.uniform1f(loc(gl, program, "uScale"), camera.scale);
-    gl.uniform1f(loc(gl, program, "uRadiusScale"), radiusScale);
+    gl.uniform2f(locs.uRes, camera.width, camera.height);
+    gl.uniform2f(locs.uPan, camera.panX, camera.panY);
+    gl.uniform1f(locs.uScale, camera.scale);
+    gl.uniform1f(locs.uRadiusScale, radiusScale);
   }
 
   private drawNodeBatch(
@@ -362,22 +429,22 @@ export class GraphRenderer {
     center: number,
   ): void {
     const gl = this.gl;
-    const p = this.nodeProgram;
-    gl.useProgram(p);
-    this.commonUniforms(p, camera, radiusScale);
-    gl.uniform1f(loc(gl, p, "uMode"), mode);
-    gl.uniform1f(loc(gl, p, "uBand"), band);
-    gl.uniform1f(loc(gl, p, "uCenter"), center);
+    const L = this.nodeLocs;
+    gl.useProgram(this.nodeProgram);
+    this.commonUniforms(L, camera, radiusScale);
+    gl.uniform1f(L.uMode, mode);
+    gl.uniform1f(L.uBand, band);
+    gl.uniform1f(L.uCenter, center);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.discBuffer);
-    const aCorner = attrib(gl, p, "aCorner", 2, 0, 0);
+    const aCorner = bindAttrib(gl, L.aCorner, 2, 0, 0);
     this.api.divisor(aCorner, 0);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, instanceBuffer);
     const b = NODE_STRIDE * 4;
-    const aOffset = attrib(gl, p, "aOffset", 2, b, 0);
-    const aSize = attrib(gl, p, "aSize", 1, b, 8);
-    const aColor = attrib(gl, p, "aColor", 4, b, 12);
+    const aOffset = bindAttrib(gl, L.aOffset, 2, b, 0);
+    const aSize = bindAttrib(gl, L.aSize, 1, b, 8);
+    const aColor = bindAttrib(gl, L.aColor, 4, b, 12);
     this.api.divisor(aOffset, 1);
     this.api.divisor(aSize, 1);
     this.api.divisor(aColor, 1);
@@ -393,18 +460,17 @@ export class GraphRenderer {
   private drawRing(ring: RingStyle, camera: CameraState, radiusScale: number): void {
     const outer = ring.radius + ring.stroke;
     const size = outer * radiusScale;
-    const data = new Float32Array([
-      ring.x,
-      ring.y,
-      size,
-      ring.color.r,
-      ring.color.g,
-      ring.color.b,
-      ring.color.a,
-    ]);
+    const data = this.ringData;
+    data[0] = ring.x;
+    data[1] = ring.y;
+    data[2] = size;
+    data[3] = ring.color.r;
+    data[4] = ring.color.g;
+    data[5] = ring.color.b;
+    data[6] = ring.color.a;
     const gl = this.gl;
     gl.bindBuffer(gl.ARRAY_BUFFER, this.ringBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+    gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
     // band and centre are fractions of the quad radius
     this.drawNodeBatch(
       this.ringBuffer,
@@ -419,21 +485,21 @@ export class GraphRenderer {
 
   private drawEdges(count: number, camera: CameraState, radiusScale: number, lineWidthPx: number): void {
     const gl = this.gl;
-    const p = this.edgeProgram;
-    gl.useProgram(p);
-    this.commonUniforms(p, camera, radiusScale);
-    gl.uniform1f(loc(gl, p, "uHalfWidth"), lineWidthPx * 0.5);
+    const L = this.edgeLocs;
+    gl.useProgram(this.edgeProgram);
+    this.commonUniforms(L, camera, radiusScale);
+    gl.uniform1f(L.uHalfWidth, lineWidthPx * 0.5);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.segmentBuffer);
-    const aTC = attrib(gl, p, "aTC", 2, 0, 0);
+    const aTC = bindAttrib(gl, L.aTC, 2, 0, 0);
     this.api.divisor(aTC, 0);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.edgeBuffer);
     const b = EDGE_STRIDE * 4;
-    const aA = attrib(gl, p, "aA", 2, b, 0);
-    const aB = attrib(gl, p, "aB", 2, b, 8);
-    const aR = attrib(gl, p, "aRadii", 2, b, 16);
-    const aC = attrib(gl, p, "aColor", 4, b, 24);
+    const aA = bindAttrib(gl, L.aA, 2, b, 0);
+    const aB = bindAttrib(gl, L.aB, 2, b, 8);
+    const aR = bindAttrib(gl, L.aRadii, 2, b, 16);
+    const aC = bindAttrib(gl, L.aColor, 4, b, 24);
     this.api.divisor(aA, 1);
     this.api.divisor(aB, 1);
     this.api.divisor(aR, 1);
@@ -449,20 +515,20 @@ export class GraphRenderer {
 
   private drawArrows(count: number, camera: CameraState): void {
     const gl = this.gl;
-    const p = this.arrowProgram;
-    gl.useProgram(p);
-    this.commonUniforms(p, camera, 1);
+    const L = this.arrowLocs;
+    gl.useProgram(this.arrowProgram);
+    this.commonUniforms(L, camera, 1);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.arrowShapeBuffer);
-    const aShape = attrib(gl, p, "aShape", 2, 0, 0);
+    const aShape = bindAttrib(gl, L.aShape, 2, 0, 0);
     this.api.divisor(aShape, 0);
 
     gl.bindBuffer(gl.ARRAY_BUFFER, this.arrowBuffer);
     const b = ARROW_STRIDE * 4;
-    const aTip = attrib(gl, p, "aTip", 2, b, 0);
-    const aDir = attrib(gl, p, "aDir", 2, b, 8);
-    const aLen = attrib(gl, p, "aLen", 1, b, 16);
-    const aC = attrib(gl, p, "aColor", 4, b, 20);
+    const aTip = bindAttrib(gl, L.aTip, 2, b, 0);
+    const aDir = bindAttrib(gl, L.aDir, 2, b, 8);
+    const aLen = bindAttrib(gl, L.aLen, 1, b, 16);
+    const aC = bindAttrib(gl, L.aColor, 4, b, 20);
     this.api.divisor(aTip, 1);
     this.api.divisor(aDir, 1);
     this.api.divisor(aLen, 1);
@@ -494,23 +560,26 @@ function visibleBounds(camera: CameraState): Bounds {
   };
 }
 
-function attrib(
+function commonLocs(gl: WebGLRenderingContext, program: WebGLProgram): CommonLocs {
+  return {
+    uRes: gl.getUniformLocation(program, "uRes"),
+    uPan: gl.getUniformLocation(program, "uPan"),
+    uScale: gl.getUniformLocation(program, "uScale"),
+    uRadiusScale: gl.getUniformLocation(program, "uRadiusScale"),
+  };
+}
+
+function bindAttrib(
   gl: WebGLRenderingContext,
-  program: WebGLProgram,
-  name: string,
+  location: number,
   size: number,
   stride: number,
   offset: number,
 ): number {
-  const location = gl.getAttribLocation(program, name);
   if (location < 0) return -1;
   gl.enableVertexAttribArray(location);
   gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
   return location;
-}
-
-function loc(gl: WebGLRenderingContext, program: WebGLProgram, name: string): WebGLUniformLocation | null {
-  return gl.getUniformLocation(program, name);
 }
 
 function dynamic(gl: WebGLRenderingContext, floats: number): WebGLBuffer {

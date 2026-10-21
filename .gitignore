@@ -4,4 +4,9 @@ main.js
 main.js.map
 src/generated/
 *.log
-.obsidian/
+.obsidian-dev-profile*/
+/.obsidian/
+test-vault/.obsidian/*
+!test-vault/.obsidian/app.json
+!test-vault/.obsidian/community-plugins.json
+!test-vault/.obsidian/core-plugins.json
