@@ -19,8 +19,25 @@
   pointer-events: none;
 }
 
+.fast-graph-stage > .fast-graph-gl {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 .fast-graph-stage .graph-controls {
   z-index: 3;
+}
+
+/* Timelapse: app.css keeps every `.graph-controls-button` hidden until the panel
+   collapses, then reveals only the ones it names, so the stop button follows the
+   animate button's rule and takes its place while the reveal is running. */
+.fast-graph-stage .graph-controls.is-close.is-timelapsing .graph-controls-button.mod-stop {
+  display: flex;
+}
+
+.fast-graph-stage .graph-controls.is-close.is-timelapsing .graph-controls-button.mod-animate {
+  display: none;
 }
 
 /* app.css has no rule for collapsed children at all - native animates inline height. */
@@ -131,4 +148,25 @@
   white-space: nowrap;
   pointer-events: none;
   opacity: 0.75;
+}
+
+@media (max-width: 600px) {
+  .fast-graph-stage .graph-controls {
+    max-width: min(88vw, 320px);
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .fast-graph-stage .graph-controls-button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .fast-graph-status {
+    inset-inline-start: 8px;
+    bottom: 8px;
+    font-size: 11px;
+  }
 }

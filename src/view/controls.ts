@@ -13,6 +13,7 @@ import {
   TextComponent,
   setIcon,
   setTooltip,
+  type ButtonComponent,
   type SearchComponent,
   type SliderComponent,
 } from "obsidian";
@@ -56,9 +57,11 @@ const TEXT = {
   newGroup: "New group",
   swatchTooltip: "Click to change color\nDrag to reorder groups",
   animate: "Animate",
+  stop: "Stop",
   close: "Close",
   openSettings: "Open graph settings",
   startTimelapse: "Start timelapse animation",
+  stopTimelapse: "Stop timelapse animation",
   restoreDefaults: "Restore default settings",
 };
 
@@ -110,8 +113,12 @@ export interface ControlsHost {
   options: GraphOptions;
   /** options changed: hand them to the engine and schedule a save */
   onOptionsChange(): void;
-  /** the timelapse button was pressed */
+  /** the timelapse start control was pressed */
   startTimelapse(): void;
+  /** the timelapse stop control was pressed */
+  stopTimelapse(): void;
+  /** is the reveal running right now? Decides which of the two controls is live. */
+  readonly timelapsing: boolean;
 }
 
 export class GraphControls {
@@ -120,8 +127,10 @@ export class GraphControls {
   private readonly listeners: Record<string, OptionListener> = {};
   private searchInput: HTMLElement | null = null;
   private filterSection: ControlSection | null = null;
+  private timelapseButton: ButtonComponent | null = null;
   private searchTimer: number | null = null;
   private groupTimer: number | null = null;
+  private activeDragCleanup: (() => void) | null = null;
 
   constructor(host: ControlsHost) {
     this.host = host;
@@ -138,7 +147,8 @@ export class GraphControls {
       host.onOptionsChange();
     });
     if (!host.isLocal) {
-      this.button(el, "mod-animate", "lucide-wand-2", TEXT.startTimelapse, () => host.startTimelapse());
+      this.button(el, "mod-animate", "lucide-wand-2", TEXT.startTimelapse, () => this.toggleTimelapse());
+      this.button(el, "mod-stop", "lucide-square", TEXT.stopTimelapse, () => this.toggleTimelapse());
     }
     this.button(el, "mod-reset", "lucide-rotate-ccw", TEXT.restoreDefaults, () => this.restoreDefaults());
 
@@ -337,6 +347,7 @@ export class GraphControls {
   /** 5 px threshold, a `drag-ghost` clone, then the rows are re-rendered in the new order. */
   private dragRow(evt: MouseEvent, row: GroupRow, board: GroupBoard): void {
     if (evt.button !== 0 || board.rows.indexOf(row) < 0) return;
+    this.activeDragCleanup?.();
     const el = row.el;
     const rect = el.getBoundingClientRect();
     const grabX = evt.clientX - rect.x;
@@ -351,6 +362,17 @@ export class GraphControls {
         if (y < r.top + r.height / 2) return i;
       }
       return board.rows.length;
+    };
+
+    const cleanup = (): void => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      if (ghost) {
+        ghost.remove();
+        document.body.removeClass("is-grabbing");
+        board.grabEl.removeClass("is-grabbing");
+      }
+      this.activeDragCleanup = null;
     };
 
     const move = (e: MouseEvent): void => {
@@ -378,12 +400,9 @@ export class GraphControls {
     };
 
     const up = (e: MouseEvent): void => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
-      if (!ghost) return;
-      ghost.remove();
-      document.body.removeClass("is-grabbing");
-      board.grabEl.removeClass("is-grabbing");
+      const hadGhost = ghost !== null;
+      cleanup();
+      if (!hadGhost) return;
       const dropped = { query: row.query.getValue(), color: { a: 1, rgb: colorInt(row.color) } };
       const ordered = board.read();
       ordered.splice(Math.min(dropIndex(e.clientY), ordered.length), 0, dropped);
@@ -391,8 +410,27 @@ export class GraphControls {
       board.commit();
     };
 
+    this.activeDragCleanup = cleanup;
     window.addEventListener("mousemove", move);
     window.addEventListener("mouseup", up);
+  }
+
+  // ---------------------------------------------------------------- timelapse
+
+  /** One press reveals from the first note, the next one halts it. */
+  private toggleTimelapse(): void {
+    if (this.host.timelapsing) this.host.stopTimelapse();
+    else this.host.startTimelapse();
+  }
+
+  private timelapseLabel(): string {
+    return this.host.timelapsing ? TEXT.stop : TEXT.animate;
+  }
+
+  /** Call when the reveal starts or ends: swaps the header icon and relabels the row button. */
+  refreshTimelapse(): void {
+    this.el.toggleClass("is-timelapsing", this.host.timelapsing);
+    this.timelapseButton?.setButtonText(this.timelapseLabel());
   }
 
   // ------------------------------------------------------------------ display
@@ -406,7 +444,8 @@ export class GraphControls {
     this.slider(children, "lineSizeMultiplier", TEXT.linkThickness, options.lineSizeMultiplier, 0.1, 5, "any");
     if (!this.host.isLocal) {
       new Setting(children).addButton((component) => {
-        component.setButtonText(TEXT.animate).onClick(() => this.host.startTimelapse());
+        this.timelapseButton = component;
+        component.setButtonText(this.timelapseLabel()).onClick(() => this.toggleTimelapse());
         return component;
       });
     }
@@ -499,6 +538,7 @@ export class GraphControls {
   }
 
   destroy(): void {
+    this.activeDragCleanup?.();
     for (const timer of [this.searchTimer, this.groupTimer]) {
       if (timer !== null) window.clearTimeout(timer);
     }

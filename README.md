@@ -7,16 +7,44 @@ one node per note.** Everything else behaves the way the built-in graph view doe
 filters, same forces, same colour groups, same right-click menus, same hover preview rules,
 same saved configuration.
 
+For a user-focused walkthrough, see the [Fast Graph View user guide](docs/USER_GUIDE.md).
+
 ## Build and install
 
 ```bash
 pnpm install
 pnpm build          # esbuild production bundle + tsc --noEmit
+pnpm test           # unit & security regression tests
 ```
 
 The plugin is the three files at the repository root: `main.js`, `styles.css`,
 `manifest.json`. Copy them to `<vault>/.obsidian/plugins/fast-graph-view/` and enable
 "Fast Graph View" in Settings → Community plugins. `pnpm watch` rebuilds on change.
+
+### Publish a GitHub release
+
+Set the same stable version in `manifest.json` and `package.json`, and add its
+`minAppVersion` to `versions.json`. After committing those changes, push a matching tag
+such as `v1.2.3`. GitHub Actions checks the version metadata, builds the plugin, and creates
+a release with the three files Obsidian needs (`main.js`, `manifest.json`, and `styles.css`).
+Run `pnpm check:release` before tagging to check the metadata locally.
+
+For a ready-to-run local vault, use the checked-in `test-vault`:
+
+```bash
+pnpm install
+pnpm build
+pnpm deploy
+```
+
+Open `test-vault` in Obsidian, enable the plugin, and use the live development loop:
+
+```bash
+pnpm dev:vault
+```
+
+Launch Obsidian with `--remote-debugging-port=9223` for automatic plugin reloads after
+each build. Set `OBSIDIAN_VAULT=/path/to/another/vault` to deploy to a different vault.
 
 ## Why it is fast
 
@@ -81,6 +109,13 @@ matches the native one including drag-to-reorder groups. Hovering a note opens t
 preview under the same modifier rule the core plugin registers for its own graph
 (`defaultMod`), so plain hover dims the rest of the graph and Mod-held hover previews.
 
+On Obsidian Mobile, a one-finger swipe pans, tapping a node opens it, and a two-finger pinch
+zooms. Mobile uses a smaller rendering budget (650 file and folder nodes, up to 250 tag and
+unresolved nodes combined, 160 labels, and a 1.5 device-pixel-ratio cap) to keep large vaults
+responsive. Folder folding is
+enabled for the mobile view even if it is disabled in the saved desktop settings; those saved
+settings are not changed.
+
 Search supports the operators the native graph has: `"exact"`, `tag:`/`#`, `path:`/`folder:`,
 `file:`/`name:`, `ext:`, `link:`/`to:`, `backlink:`/`from:`, `is:orphan`, and `-` negation,
 plus `is:cluster` for this plugin's folder nodes.
@@ -91,9 +126,13 @@ Deliberate departures from the built-in view, and why:
 
 - **Timelapse advances by note count**, not by calendar continuity. Core's animation
   interpolates over creation dates; here the step count is derived from the link count, so
-  the budget is spent on visible motion rather than on empty date gaps. Neither core nor
-  this view has a stop control: `Escape` does nothing, and pressing Animate again restarts
-  the reveal from the first note. It ends when every note has been shown.
+  the budget is spent on visible motion rather than on empty date gaps. Core's reveal has
+  no stop path at all — `Escape` does nothing and Animate only restarts it. Here the start
+  control *is* the stop control while the reveal runs: Animate becomes Stop under Display,
+  the collapsed panel's wand becomes a square, `Escape` halts it, and a
+  `Stop graph timelapse animation` command joins the palette for exactly as long as there is
+  something to halt, so it can be bound to a hotkey. It also ends when every note has been
+  shown.
 - **No body-text or property search operators.** Links come from `metadataCache`, which
   does not index search over content; adding it would mean reading every file, which is the
   thing this plugin exists to avoid.
@@ -123,8 +162,7 @@ Deliberate departures from the built-in view, and why:
 are the scenarios it runs: `trusted.mjs` (hover, click, right-click, wheel, pan, node drag,
 idle-loop, click navigation), `panel.mjs` (control panel), `local.mjs` (local graph),
 `standalone.mjs` (running without the takeover of the built-in view, and the listener and
-worker teardown when the plugin is disabled), `crash-watch.mjs` (renderer reload journaling),
-plus the older perf/probe scripts.
+worker teardown when the plugin is disabled), and `crash-watch.mjs` (renderer reload journaling).
 
 The instance has to be launched so that it keeps producing frames while another window is on
 top of it — otherwise Chromium stops its frame sink, `requestAnimationFrame` freezes, and
@@ -136,4 +174,8 @@ flatpak run md.obsidian.Obsidian \
   --disable-backgrounding-occluded-windows --disable-renderer-backgrounding \
   --disable-background-timer-throttling --disable-features=CalculateNativeWinOcclusion
 ```
+
+## License
+
+[MIT](LICENSE)
 

@@ -15,6 +15,7 @@
  */
 
 import { buildGraph, emptyGraphModel, type BuildOptions, type ColorGroup } from "../graph/build";
+import { Platform } from "obsidian";
 import { NodeKind, type ClusterMeta, type GraphModel } from "../graph/types";
 import type { RawGraph } from "../graph/raw";
 import { modelRadii } from "../graph/sizing";
@@ -38,6 +39,11 @@ const FADE_SNAP = 1 / 255;
 const IDLE_FRAMES_TO_STOP = 60;
 /** Above this many nodes the label pass stops counting. */
 const MAX_LABELS = 700;
+/** Keep the mobile graph responsive on phone GPUs and memory budgets. */
+const MOBILE_MAX_LABELS = 160;
+const MOBILE_NODE_BUDGET = 650;
+const MOBILE_METADATA_BUDGET = 250;
+const MOBILE_CLUSTER_THRESHOLD = 15;
 /** Fields that read arrow and +/- keystrokes themselves, so the camera must leave them alone. */
 const TEXTUAL_INPUTS = new Set([
   "color", "date", "datetime-local", "email", "file", "month", "number", "password", "range",
@@ -55,6 +61,8 @@ export interface EngineHost {
   onClusterHover(meta: ClusterMeta | null, screen: { x: number; y: number } | null): void;
   onStats(stats: EngineStats): void;
   onStatus(status: string | null): void;
+  /** the reveal started or stopped, including when it ended by itself */
+  onTimelapseChange(): void;
   /** ask the view to persist `scale` the way native does (2 s watcher) */
   onViewSettled(zoom: number): void;
 }
@@ -86,6 +94,7 @@ const EMPTY_F = new Float32Array(0);
 export class GraphEngine {
   readonly camera = new Camera();
   model: GraphModel | null = null;
+  private readonly mobile = Platform.isMobile;
 
   private renderer: GraphRenderer | null = null;
   private labelLayer: LabelLayer | null = null;
@@ -121,6 +130,8 @@ export class GraphEngine {
   private idleFrames = 0;
   private running = false;
   private needsPaint = true;
+  private fadesSettled = true;
+  private colorsDirty = true;
   private rebuildTimer: number | null = null;
   private lastBuildMs = 0;
   private lastRenderMs = 0;
@@ -161,7 +172,7 @@ export class GraphEngine {
     gl.className = "graph-canvas fast-graph-gl";
     stage.appendChild(gl);
     try {
-      this.renderer = new GraphRenderer(gl);
+      this.renderer = new GraphRenderer(gl, this.mobile);
     } catch (error) {
       gl.remove();
       this.host.onStatus(`WebGL unavailable: ${error instanceof Error ? error.message : error}`);
@@ -175,7 +186,8 @@ export class GraphEngine {
 
   resize(): void {
     const rect = this.host.stageEl.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
+    const deviceDpr = window.devicePixelRatio || 1;
+    const dpr = this.mobile ? Math.min(deviceDpr, 1.5) : deviceDpr;
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
     this.camera.resize(width, height, dpr);
@@ -247,6 +259,8 @@ export class GraphEngine {
 
   onCssChange(): void {
     this.theme.refresh();
+    this.cachedFont = "";
+    this.colorsDirty = true;
     this.needsPaint = true;
     this.wake();
   }
@@ -272,12 +286,14 @@ export class GraphEngine {
       return;
     }
     const options: BuildOptions = {
-      ...clusterKeys(this.cluster),
+      ...clusterKeys(this.cluster, this.mobile),
       showTags: this.options.showTags,
       showAttachments: this.options.showAttachments,
       showUnresolved: !this.options.hideUnresolved,
       showOrphans: this.host.isLocal ? true : this.options.showOrphans,
-      maxNonFileNodes: this.cluster.maxMetadataNodes,
+      maxNonFileNodes: this.mobile
+        ? Math.min(this.cluster.maxMetadataNodes, Math.floor(MOBILE_METADATA_BUDGET / 2))
+        : this.cluster.maxMetadataNodes,
       revealOverrides: this.revealOverrides,
       forcedCollapsed: this.forcedCollapsed,
       scopePath: this.scopePath,
@@ -318,6 +334,8 @@ export class GraphEngine {
     this.dragNode = -1;
     this.focusIndex = this.findFocus(model);
     this.groupColorSource = null;
+    this.fadesSettled = true;
+    this.colorsDirty = true;
 
     this.driver.update(model, this.collide, alpha);
     if (!previous) this.camera.resetPan();
@@ -342,6 +360,7 @@ export class GraphEngine {
     const source = this.options.colorGroups;
     if (source === this.groupColorSource) return;
     this.groupColorSource = source;
+    this.colorsDirty = true;
     this.groupColors = source.map((g: ColorGroup) => ({
       r: ((g.color.rgb >> 16) & 255) / 255,
       g: ((g.color.rgb >> 8) & 255) / 255,
@@ -397,15 +416,16 @@ export class GraphEngine {
   private frame = (): void => {
     if (this.destroyed) return;
     const moved = this.camera.tick();
-    const painting = this.needsPaint || moved || this.fadesEasing();
+    const fading = !this.fadesSettled && this.fadesEasing();
+    const painting = this.needsPaint || moved || fading;
     if (painting) {
       this.paint();
       this.needsPaint = false;
       this.idleFrames = 0;
+      if (this.pointerActive && !this.panning && this.dragNode < 0) this.retestHover();
     } else {
       this.idleFrames++;
     }
-    if (this.pointerActive) this.retestHover();
     if (this.idleFrames > IDLE_FRAMES_TO_STOP && this.alpha <= ALPHA_MIN) {
       this.running = false;
       this.raf = 0;
@@ -444,6 +464,8 @@ export class GraphEngine {
       this.edgeFade[e] = next;
       moving = true;
     }
+    this.colorsDirty = true;
+    if (!moving) this.fadesSettled = true;
     return moving;
   }
 
@@ -459,23 +481,26 @@ export class GraphEngine {
     const highlight = this.dragNode >= 0 ? this.dragNode : this.hoverNode;
     this.syncGroupColors();
 
-    // node alpha: eased fade × the colour's own CSS alpha
-    for (let i = 0; i < model.nodeCount; i++) {
-      const o = i * 4;
-      const base = this.baseColorOf(i, c);
-      this.nodeColor[o] = base.r;
-      this.nodeColor[o + 1] = base.g;
-      this.nodeColor[o + 2] = base.b;
-      this.nodeColor[o + 3] = this.fade[i] * base.a;
-    }
-    for (let e = 0; e < model.edgeCount; e++) {
-      const o = e * 4;
-      const incident = highlight >= 0 && (model.eu[e] === highlight || model.ev[e] === highlight);
-      const base = incident ? c.lineHighlight : c.line;
-      this.edgeColor[o] = base.r;
-      this.edgeColor[o + 1] = base.g;
-      this.edgeColor[o + 2] = base.b;
-      this.edgeColor[o + 3] = this.hiddenEdge[e] === 1 ? 0 : this.edgeFade[e] * base.a;
+    if (this.colorsDirty) {
+      this.colorsDirty = false;
+      // node alpha: eased fade × the colour's own CSS alpha
+      for (let i = 0; i < model.nodeCount; i++) {
+        const o = i * 4;
+        const base = this.baseColorOf(i, c);
+        this.nodeColor[o] = base.r;
+        this.nodeColor[o + 1] = base.g;
+        this.nodeColor[o + 2] = base.b;
+        this.nodeColor[o + 3] = this.fade[i] * base.a;
+      }
+      for (let e = 0; e < model.edgeCount; e++) {
+        const o = e * 4;
+        const incident = highlight >= 0 && (model.eu[e] === highlight || model.ev[e] === highlight);
+        const base = incident ? c.lineHighlight : c.line;
+        this.edgeColor[o] = base.r;
+        this.edgeColor[o + 1] = base.g;
+        this.edgeColor[o + 2] = base.b;
+        this.edgeColor[o + 3] = this.hiddenEdge[e] === 1 ? 0 : this.edgeFade[e] * base.a;
+      }
     }
 
     const scene: RenderScene = {
@@ -521,10 +546,10 @@ export class GraphEngine {
           fade: this.fade,
           nodeCount: model.nodeCount,
           textAlpha,
-          color: rgbaCss(c.text),
+          color: this.theme.textCss,
           fontStack: this.fontStack(),
           hovered: highlight,
-          maxLabels: MAX_LABELS,
+          maxLabels: this.mobile ? MOBILE_MAX_LABELS : MAX_LABELS,
         },
         this.camera,
       );
@@ -581,6 +606,12 @@ export class GraphEngine {
   private lastPanX = 0;
   private lastPanY = 0;
   private dragMoved = 0;
+  private readonly touchPoints = new Map<number, { x: number; y: number }>();
+  private pinch: { distance: number; x: number; y: number } | null = null;
+  private touchTapNode = -1;
+  private touchStartX = 0;
+  private touchStartY = 0;
+  private touchMoved = false;
 
   private onPointerDown = (evt: PointerEvent): void => {
     this.lastEvt = evt;
@@ -588,6 +619,10 @@ export class GraphEngine {
     const x = evt.clientX - rect.left;
     const y = evt.clientY - rect.top;
     const hit = this.hitTest(x, y);
+    if (evt.pointerType === "touch") {
+      this.beginTouch(evt, x, y, hit);
+      return;
+    }
     if (hit >= 0 && (evt.button === 0 || (evt.button === 2 && isMac()))) {
       this.dragNode = hit;
       this.dragMoved = 0;
@@ -619,6 +654,23 @@ export class GraphEngine {
     const rect = this.host.stageEl.getBoundingClientRect();
     const x = evt.clientX - rect.left;
     const y = evt.clientY - rect.top;
+    if (evt.pointerType === "touch" && this.touchPoints.has(evt.pointerId)) {
+      this.touchPoints.set(evt.pointerId, { x, y });
+      if (this.pinch) {
+        this.movePinch();
+        return;
+      }
+      if (this.panning) {
+        if (Math.hypot(x - this.touchStartX, y - this.touchStartY) > 8) this.touchMoved = true;
+        this.camera.trackPan(x - this.lastPanX, y - this.lastPanY, performance.now());
+        this.lastPanX = x;
+        this.lastPanY = y;
+        this.pointerX = x;
+        this.pointerY = y;
+        this.wake();
+        return;
+      }
+    }
     this.pointerX = x;
     this.pointerY = y;
     this.pointerActive = true;
@@ -641,6 +693,10 @@ export class GraphEngine {
   };
 
   private onPointerUp = (evt: PointerEvent): void => {
+    if (evt.pointerType === "touch") {
+      this.endTouch(evt, true);
+      return;
+    }
     this.endPointer(evt, true);
   };
 
@@ -650,15 +706,122 @@ export class GraphEngine {
    */
   private onPointerOutside = (evt: PointerEvent): void => {
     if (this.destroyed) return;
+    if (evt.pointerType === "touch") {
+      this.endTouch(evt, false);
+      return;
+    }
     if (!this.panning && this.dragNode < 0) return;
     this.endPointer(evt, false);
   };
+
+  /** Touch drags pan the graph, taps open a node, and two fingers pinch to zoom. */
+  private beginTouch(evt: PointerEvent, x: number, y: number, hit: number): void {
+    this.touchPoints.set(evt.pointerId, { x, y });
+    this.pointerX = x;
+    this.pointerY = y;
+    this.pointerActive = true;
+    try {
+      (evt.target as HTMLElement).setPointerCapture?.(evt.pointerId);
+    } catch {
+      // Pointer capture is not available on every mobile WebView.
+    }
+    this.camera.stopGlide();
+    if (this.touchPoints.size >= 2) {
+      this.touchTapNode = -1;
+      this.touchMoved = true;
+      this.panning = true;
+      this.host.stageEl.classList.add("is-grabbing");
+      this.pinch = this.measurePinch();
+      this.wake();
+      return;
+    }
+
+    this.touchTapNode = hit;
+    this.touchStartX = x;
+    this.touchStartY = y;
+    this.touchMoved = false;
+    this.lastPanX = x;
+    this.lastPanY = y;
+    this.panning = true;
+    this.host.stageEl.classList.add("is-grabbing");
+    this.retestHover();
+    this.wake();
+  }
+
+  private endTouch(evt: PointerEvent, allowClick: boolean): void {
+    if (!this.touchPoints.has(evt.pointerId)) return;
+    const wasPinching = this.pinch !== null;
+    this.touchPoints.delete(evt.pointerId);
+
+    if (wasPinching) {
+      this.touchTapNode = -1;
+      this.touchMoved = true;
+      if (this.touchPoints.size >= 2) {
+        this.pinch = this.measurePinch();
+      } else {
+        this.pinch = null;
+        const remaining = this.touchPoints.values().next().value as { x: number; y: number } | undefined;
+        if (remaining) {
+          // Continue naturally as a one-finger pan when one side of the pinch lifts.
+          this.lastPanX = remaining.x;
+          this.lastPanY = remaining.y;
+          this.touchStartX = remaining.x;
+          this.touchStartY = remaining.y;
+          this.panning = true;
+        } else {
+          this.panning = false;
+          this.camera.stopGlide();
+          this.host.stageEl.classList.remove("is-grabbing");
+        }
+      }
+      this.wake();
+      return;
+    }
+
+    const tapNode = this.touchTapNode;
+    const tapped = allowClick && !this.touchMoved && tapNode >= 0;
+    this.touchTapNode = -1;
+    this.panning = false;
+    this.host.stageEl.classList.remove("is-grabbing");
+    this.camera.releasePan();
+    this.pointerActive = false;
+    this.retestHover();
+    if (tapped) {
+      const node = this.nodeAt(tapNode);
+      if (node) this.host.onNodeClick(node, evt);
+    }
+    this.wake();
+  }
+
+  private measurePinch(): { distance: number; x: number; y: number } | null {
+    const points = this.touchPoints.values();
+    const first = points.next().value as { x: number; y: number } | undefined;
+    const second = points.next().value as { x: number; y: number } | undefined;
+    if (!first || !second) return null;
+    return {
+      distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
+      x: (first.x + second.x) / 2,
+      y: (first.y + second.y) / 2,
+    };
+  }
+
+  private movePinch(): void {
+    const previous = this.pinch;
+    const next = this.measurePinch();
+    if (!previous || !next) return;
+    this.camera.zoomAt(next.distance / previous.distance, next.x, next.y);
+    this.camera.panBy(next.x - previous.x, next.y - previous.y);
+    this.pinch = next;
+    this.needsPaint = true;
+    this.wake();
+  }
 
   private endPointer(evt: PointerEvent, allowClick: boolean): void {
     const dragged = this.dragNode;
     if (dragged >= 0) {
       this.driver.unpin(dragged);
       this.dragNode = -1;
+      this.markAdjacent(this.hoverNode);
       const contextPress = isMac() && evt.ctrlKey;
       const clickable = evt.button === 0 || evt.button === 1;
       if (allowClick && this.dragMoved <= 5 && clickable && !contextPress) {
@@ -691,6 +854,14 @@ export class GraphEngine {
 
   private onKeyDown = (evt: KeyboardEvent): void => {
     if (!this.cameraKeys(document.activeElement)) return;
+    if (evt.key === "Escape") {
+      // only borrow it while there is a reveal to halt, otherwise it stays Obsidian's
+      if (this.progressionTimer !== null) {
+        evt.preventDefault();
+        this.stopTimelapse();
+      }
+      return;
+    }
     const step = evt.shiftKey ? 60 : 20;
     let handled = true;
     switch (evt.key) {
@@ -745,12 +916,18 @@ export class GraphEngine {
   hitTest(cssX: number, cssY: number): number {
     const model = this.model;
     if (!model) return -1;
+    const zoom = this.camera.zoom;
+    const scale = Math.sqrt(zoom);
+    const panX = this.camera.panX;
+    const panY = this.camera.panY;
+    const pos = this.pos;
+    const radii = this.radii;
     let best = -1;
     let bestDistance = Infinity;
     for (let i = 0; i < model.nodeCount; i++) {
-      const x = this.camera.worldToScreenX(this.pos[i * 2]);
-      const y = this.camera.worldToScreenY(this.pos[i * 2 + 1]);
-      const r = this.camera.screenRadius(this.radii[i]) + 2;
+      const x = pos[i * 2] * zoom + panX;
+      const y = pos[i * 2 + 1] * zoom + panY;
+      const r = radii[i] * scale + 2;
       const dx = x - cssX;
       const dy = y - cssY;
       const d2 = dx * dx + dy * dy;
@@ -805,6 +982,8 @@ export class GraphEngine {
   /** Neighbour mask for the hover fade, straight out of the CSR adjacency. */
   private markAdjacent(node: number): void {
     this.adjacent.fill(0);
+    this.fadesSettled = false;
+    this.colorsDirty = true;
     const model = this.model;
     if (!model || node < 0) return;
     for (let k = model.adjOff[node]; k < model.adjOff[node + 1]; k++) this.adjacent[model.adjNode[k]] = 1;
@@ -883,6 +1062,7 @@ export class GraphEngine {
       this.rebuild();
     }, 500);
     this.host.onStatus("Timelapse running");
+    this.host.onTimelapseChange();
     return true;
   }
 
@@ -892,6 +1072,7 @@ export class GraphEngine {
       this.progressionTimer = null;
       this.progressionLimit = null;
       this.host.onStatus(null);
+      this.host.onTimelapseChange();
       this.scheduleRebuild(ALPHA_REHEAT);
     }
   }
@@ -983,7 +1164,7 @@ function isMac(): boolean {
 }
 
 /** Clustering settings are builder inputs; the native option keys are not. */
-function clusterKeys(cluster: ClusterOptions): Pick<
+function clusterKeys(cluster: ClusterOptions, mobile: boolean): Pick<
   BuildOptions,
   | "clusterEnabled"
   | "clusterThreshold"
@@ -992,10 +1173,11 @@ function clusterKeys(cluster: ClusterOptions): Pick<
   | "minTagUses"
 > {
   return {
-    clusterEnabled: cluster.enabled,
-    clusterThreshold: cluster.threshold,
+    // Mobile gets a predictable upper bound even when desktop clustering is off.
+    clusterEnabled: mobile || cluster.enabled,
+    clusterThreshold: mobile ? Math.min(cluster.threshold, MOBILE_CLUSTER_THRESHOLD) : cluster.threshold,
     clusterMode: cluster.mode,
-    maxVisibleNodes: cluster.maxVisibleNodes,
+    maxVisibleNodes: mobile ? Math.min(cluster.maxVisibleNodes, MOBILE_NODE_BUDGET) : cluster.maxVisibleNodes,
     minTagUses: 1,
   };
 }
@@ -1008,8 +1190,4 @@ function groupsChanged(a: ColorGroup[], b: ColorGroup[]): boolean {
     if (a[i].query !== b[i].query || a[i].color.rgb !== b[i].color.rgb) return true;
   }
   return false;
-}
-
-function rgbaCss(c: Rgba): string {
-  return `rgba(${Math.round(c.r * 255)}, ${Math.round(c.g * 255)}, ${Math.round(c.b * 255)}, ${c.a})`;
 }

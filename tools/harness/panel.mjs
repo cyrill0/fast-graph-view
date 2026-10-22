@@ -503,9 +503,9 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     };
   });
 
-  // Timelapse. The native `renderProgression` has no stop path, so the stop below is the engine
-  // API rather than a user control, and every sample is timer-driven because the reveal grows on
-  // a setInterval and not on a frame.
+  // Timelapse. Every stop below is the user control - the row button, the header wand, `Escape`
+  // or the palette command - not the engine API, and every sample is timer-driven because the
+  // reveal grows on a setInterval and not on a frame.
   const SHAPE = `JSON.stringify((function () {
     const e = window.__p.engine(), m = e.model;
     let files = 0, tags = 0, unres = 0, clusters = 0, iso = 0;
@@ -518,11 +518,51 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
              isolated: iso, limit: e.progressionLimit ?? null, timelapsing: !!e.timelapsing, overflow: m.overflow };
   })())`;
 
+  /** What the two timelapse controls currently offer, including whether the stop icon is there. */
+  const CONTROL = `JSON.stringify((function () {
+    const p = window.__p.panel();
+    const box = (sel) => {
+      const el = p?.querySelector(sel);
+      if (!el) return null;
+      const b = el.getBoundingClientRect();
+      return { shown: b.width >= 4 && b.height >= 4, label: el.textContent || null, svgs: el.querySelectorAll('svg').length };
+    };
+    return { running: !!(p && p.hasClass('is-timelapsing')),
+             row: box('.mod-display .setting-item button'),
+             animate: box('.graph-controls-button.mod-animate'),
+             stop: box('.graph-controls-button.mod-stop') };
+  })())`;
+
+  /**
+   * The plugin's own timelapse commands, whatever the id prefix is. `Commands` has no
+   * `checkCommand`, so availability is read the way the palette reads it: `checkCallback(true)`.
+   */
+  const commandInfo = async (suffix) =>
+    json(
+      await evalJs(`(function () {
+        const c = app.commands.listCommands().find((x) => new RegExp(':' + ${JSON.stringify(suffix)} + '$').test(x.id ?? ''));
+        if (!c) return null;
+        const check = typeof c.checkCallback === 'function' ? c.checkCallback(true) : null;
+        return JSON.stringify({ id: c.id, name: c.name, available: check === true });
+      })()`),
+    );
+  const runCommand = (suffix) =>
+    evalJs(`(function () {
+      const c = app.commands.listCommands().find((x) => new RegExp(':' + ${JSON.stringify(suffix)} + '$').test(x.id ?? ''));
+      return c ? app.commands.executeCommandById(c.id) : 'no such command';
+    })()`);
+
   await step('timelapse', async () => {
     const before = await evalJs(SHAPE).then(json);
+    const idleCommand = await commandInfo('stop-animate');
     await ensureOpen('display');
+    const idleControl = await evalJs(CONTROL).then(json);
+
+    // start from the Display row, which must flip to a stop control
     const at = await clickSel('.graph-controls .mod-display .setting-item button', 300);
     if (at?.skipped) return at;
+    const startedControl = await evalJs(CONTROL).then(json);
+    const runningCommand = await commandInfo('stop-animate');
     const t0 = Date.now();
     const frames = [];
     for (const mark of [300, 2000, 5000]) {
@@ -530,26 +570,37 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
       frames.push({ atMs: mark, ...(await evalJs(SHAPE).then(json)) });
     }
 
-    // Escape is not a stop control in either implementation; measure it instead of assuming it
+    // Escape is now a stop control: measure that it halts the reveal and restores the control
     await key('Escape', { waitMs: 600 });
     const afterEscape = await evalJs(SHAPE).then(json);
+    const afterEscapeControl = await evalJs(CONTROL).then(json);
 
-    // a second click restarts rather than stacking another interval
-    const restartAt = await clickSel('.graph-controls .mod-display .setting-item button', 1500);
+    // the same row control starts again, and the same row control stops it a second later
+    await clickSel('.graph-controls .mod-display .setting-item button', 1500);
     const restarted = await evalJs(SHAPE).then(json);
-
-    const stopped = await evalJs(`(window.__p.engine().stopTimelapse(), ${SHAPE})`).then(json);
-    await sleep(1500);
-    const stopA = await evalJs(SHAPE).then(json);
+    const stoppedAt = await clickSel('.graph-controls .mod-display .setting-item button', 800);
+    const stopped = await evalJs(SHAPE).then(json);
     await sleep(2500);
     const stopB = await evalJs(SHAPE).then(json);
+
+    // the row button toggles, so a restart only comes from the command - and one stop must
+    // be enough to leave nothing advancing afterwards
+    await runCommand('animate');
+    await sleep(1200);
+    await runCommand('animate');
+    const startedByCommand = await evalJs(SHAPE).then(json);
+    const controlAfterCommand = await evalJs(CONTROL).then(json);
+    await clickSel('.graph-controls .mod-display .setting-item button', 800);
+    const haltA = await evalJs(SHAPE).then(json);
+    await sleep(2500);
+    const haltB = await evalJs(SHAPE).then(json);
 
     // and the same control through the header wand, which app.css only shows while the panel is closed
     await clickSel('.graph-controls .mod-close', 500);
     const wandAt = await clickSel('.graph-controls .mod-animate', 1500);
     const wand = await evalJs(SHAPE).then(json);
-    await evalJs(`(window.__p.engine().stopTimelapse(), 1)`);
-    await sleep(1500);
+    const wandControl = await evalJs(CONTROL).then(json);
+    const wandStopAt = await clickSel('.graph-controls .mod-stop', 800);
     const wandStopped = await evalJs(SHAPE).then(json);
     await clickSel('.graph-controls .mod-open', 400);
     const settled = await settle(60000);
@@ -558,12 +609,17 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     return {
       at, before, frames,
       grew: last.nodes > (frames[0]?.nodes ?? 0) && last.edges > (frames[0]?.edges ?? 0),
-      escapeStops: !(afterEscape.timelapsing ?? true),
-      afterEscape,
-      restartAt, restarted,
-      stopped, afterStop1500: stopA, afterStop4000: stopB,
-      advancedAfterStop: stopB.nodes !== stopA.nodes || stopB.limit !== stopA.limit,
-      wandAt, wand, wandStopped, settled,
+      idleControl, startedControl,
+      controlToggles: startedControl?.running === true && idleControl?.running === false,
+      escapeStops: !(afterEscape.timelapsing ?? true), afterEscape, afterEscapeControl,
+      restarted, stoppedAt, stopped, afterStop2500: stopB,
+      advancedAfterStop: stopB.nodes !== stopped.nodes || stopB.limit !== stopped.limit,
+      startedByCommand, controlAfterCommand, haltA, haltB,
+      stillAdvancing: !!haltB.timelapsing || haltB.nodes !== haltA.nodes || haltB.limit !== haltA.limit,
+      wandAt, wand, wandControl, wandStopAt, wandStopped, settled,
+      wandSwapped: wandControl?.animate?.shown === false && wandControl?.stop?.shown === true,
+      stopIconRendered: wandControl?.stop?.svgs > 0,
+      idleCommand, runningCommand,
     };
   });
 

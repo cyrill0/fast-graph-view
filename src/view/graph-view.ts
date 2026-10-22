@@ -31,7 +31,7 @@ import {
 import type { RawGraph } from "../graph/raw";
 import { VaultGraphSource } from "../graph/source";
 import { NodeKind, type ClusterMeta } from "../graph/types";
-import type { ClusterOptions, GraphOptions } from "../settings";
+import { applyNativeOptions, cloneGraphOptions, type ClusterOptions, type GraphOptions } from "../settings";
 import { REVEAL_STEP, GraphEngine, type EngineHost, type EngineStats, type HitNode } from "./engine";
 import { GraphControls, type ControlsHost } from "./controls";
 
@@ -95,7 +95,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.init = init;
     this.options = init.options;
     this.stageEl = init.contentEl;
-    this.engine = new GraphEngine(this, cloneOptions(this.options), init.deps.cluster);
+    this.engine = new GraphEngine(this, cloneGraphOptions(this.options), init.deps.cluster);
     this.controls = new GraphControls(this);
   }
 
@@ -113,7 +113,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.buildStatusLine();
     this.unsubscribe = this.init.deps.source.subscribe((next) => this.onRaw(next));
     this.engine.setClusterOptions(this.init.deps.cluster);
-    this.engine.setOptions(cloneOptions(this.options));
+    this.engine.setOptions(cloneGraphOptions(this.options));
     this.onRaw(this.init.deps.source.current());
   }
 
@@ -157,11 +157,11 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
 
   /** A leaf state carried `options`; push them in without echoing a save. */
   applyStateOptions(partial: Partial<GraphOptions>): void {
-    assign(this.options, partial);
+    applyNativeOptions(this.options, partial as Record<string, unknown>);
     if (!this.loaded) return;
     this.controls.applyOptions(this.options);
     this.engine.setClusterOptions(this.init.deps.cluster);
-    this.engine.setOptions(cloneOptions(this.options));
+    this.engine.setOptions(cloneGraphOptions(this.options));
   }
 
   /** PNG data url of what is on screen, or null while there is nothing to shoot. */
@@ -190,7 +190,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
   onOptionsChange(): void {
     // native reads the panel back on every save, `close` included
     this.options.close = this.controls.collapsed;
-    this.engine.setOptions(cloneOptions(this.options));
+    this.engine.setOptions(cloneGraphOptions(this.options));
     if (this.saveTimer !== 0) return;
     this.saveTimer = window.setTimeout(() => {
       this.saveTimer = 0;
@@ -200,6 +200,14 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
 
   startTimelapse(): void {
     if (!this.engine.startTimelapse()) this.setStatus("Timelapse is only for the global graph");
+  }
+
+  stopTimelapse(): void {
+    this.engine.stopTimelapse();
+  }
+
+  get timelapsing(): boolean {
+    return this.engine.timelapsing;
   }
 
   // --------------------------------------------------------------- host: input
@@ -371,6 +379,12 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.paintStatus();
   }
 
+  /** The reveal changed: swap the panel's start control for its stop one. */
+  onTimelapseChange(): void {
+    if (!this.loaded) return;
+    this.controls.refreshTimelapse();
+  }
+
   private setStatus(text: string): void {
     this.transient = text;
     this.paintStatus();
@@ -480,6 +494,15 @@ export class FastGraphView extends ItemView {
     this.presenter.startTimelapse();
   }
 
+  /** And the stop command, which only exists while a reveal is running. */
+  stopTimelapse(): void {
+    this.presenter.stopTimelapse();
+  }
+
+  get timelapsing(): boolean {
+    return this.presenter.timelapsing;
+  }
+
   applyClusterOptions(): void {
     this.presenter.clusterChanged();
   }
@@ -515,7 +538,7 @@ export class FastLocalGraphView extends FileView {
       leaf,
       isLocal: true,
       deps,
-      options: cloneOptions(deps.globalOptions),
+      options: cloneGraphOptions(deps.globalOptions),
       onSave: () => this.save(),
     });
   }
@@ -691,7 +714,12 @@ function addScreenshotItem(menu: Menu, presenter: GraphPresenter): void {
 
 async function copyPng(dataUrl: string): Promise<void> {
   try {
-    const blob = await (await fetch(dataUrl)).blob();
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) throw new Error("Invalid PNG data URL");
+    const binary = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const blob = new Blob([bytes], { type: "image/png" });
     const clipper = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
     if (!clipper) throw new Error("Clipboard images are not supported here");
     await navigator.clipboard.write([new clipper({ "image/png": blob })]);
@@ -734,21 +762,6 @@ function internalPopover(popover: HoverPopover | null): {
     .state === undefined
     ? null
     : (popover as unknown as { state: number; onTarget: boolean; transition: () => void });
-}
-
-function cloneOptions(options: GraphOptions): GraphOptions {
-  return { ...options, colorGroups: options.colorGroups.map((g) => ({ query: g.query, color: { ...g.color } })) };
-}
-
-function assign(target: GraphOptions, partial: Partial<GraphOptions>): void {
-  const to = target as unknown as Record<string, unknown>;
-  const groups = partial.colorGroups;
-  for (const [key, value] of Object.entries(partial)) {
-    if (value !== undefined && key !== "colorGroups") to[key] = value;
-  }
-  if (groups) {
-    target.colorGroups = groups.map((g) => ({ query: g.query, color: { a: g.color.a ?? 1, rgb: g.color.rgb ?? 0 } }));
-  }
 }
 
 function formatInt(n: number): string {

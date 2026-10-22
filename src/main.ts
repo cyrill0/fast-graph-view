@@ -43,7 +43,9 @@ import {
   DEFAULT_CLUSTER_OPTIONS,
   DEFAULT_GRAPH_OPTIONS,
   applyNativeOptions,
+  cloneGraphOptions,
   mergeData,
+  sanitizeClusterOptions,
   type ClusterOptions,
   type GraphOptions,
   type PluginData,
@@ -77,7 +79,7 @@ interface Swap {
 }
 
 export default class FastGraphPlugin extends Plugin {
-  options: GraphOptions = { ...DEFAULT_GRAPH_OPTIONS };
+  options: GraphOptions = cloneGraphOptions(DEFAULT_GRAPH_OPTIONS);
   settings: PluginData = mergeData(null);
   source!: VaultGraphSource;
   private deps!: GraphViewDeps;
@@ -90,7 +92,7 @@ export default class FastGraphPlugin extends Plugin {
 
   async onload(): Promise<void> {
     this.settings = mergeData(await this.loadData());
-    this.options = { ...this.settings.graph };
+    this.options = cloneGraphOptions(this.settings.graph);
     this.source = new VaultGraphSource(this.app, this);
     this.deps = this.buildDeps();
     if (this.settings.takeover) this.seedFromNative();
@@ -285,6 +287,17 @@ export default class FastGraphPlugin extends Plugin {
         return true;
       },
     });
+    // conditional so it only surfaces in the palette while there is a reveal to halt
+    this.addCommandRecorded({
+      id: "stop-animate",
+      name: "Stop graph timelapse animation",
+      checkCallback: (check) => {
+        const view = this.app.workspace.getActiveViewOfType(FastGraphView);
+        if (!view || !view.timelapsing) return false;
+        if (!check) view.stopTimelapse();
+        return true;
+      },
+    });
   }
 
   private addCommandRecorded(command: Command): void {
@@ -359,12 +372,13 @@ export default class FastGraphPlugin extends Plugin {
       core.instance.saveOptions();
       return;
     }
-    this.settings.graph = options;
+    this.settings.graph = cloneGraphOptions(options);
     void this.saveData(this.settings);
   }
 
   async saveSettings(): Promise<void> {
-    this.settings.graph = this.options;
+    this.settings.graph = cloneGraphOptions(this.options);
+    this.settings.cluster = sanitizeClusterOptions(this.settings.cluster);
     await this.saveData(this.settings);
   }
 
@@ -435,7 +449,7 @@ class FastGraphSettings extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Files per folder before folding")
-      .setDesc("The brief's rule is 20: a folder with more than 20 notes becomes a single node.")
+      .setDesc("Folders with more notes than this threshold collapse into a single node (default: 20).")
       .addSlider((slider) =>
         slider
           .setLimits(1, 200, 1)
