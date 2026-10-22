@@ -16,7 +16,6 @@
  */
 
 import {
-  FileView,
   ItemView,
   Menu,
   Notice,
@@ -34,9 +33,10 @@ import { NodeKind, type ClusterMeta } from "../graph/types";
 import { applyNativeOptions, cloneGraphOptions, type ClusterOptions, type GraphOptions } from "../settings";
 import { REVEAL_STEP, GraphEngine, type EngineHost, type EngineStats, type HitNode } from "./engine";
 import { GraphControls, type ControlsHost } from "./controls";
+import { formatFixed, formatInt, t, tp } from "../i18n";
 
-export const GRAPH_VIEW_TYPE = "graph";
-export const LOCAL_GRAPH_VIEW_TYPE = "localgraph";
+export const GRAPH_VIEW_TYPE = "fast-graph-view";
+export const LOCAL_GRAPH_VIEW_TYPE = "fast-localgraph";
 
 /** Whatever `main.ts` can hand a pane: the shared snapshot and the persistence hooks. */
 export interface GraphViewDeps {
@@ -45,7 +45,7 @@ export interface GraphViewDeps {
   /** the live global-graph options, shared by every global leaf */
   globalOptions: GraphOptions;
   cluster: ClusterOptions;
-  /** the page-preview source id registered for these panes (`graph` under takeover) */
+  /** page-preview source id registered by this plugin */
   hoverSource: string;
   /** write the global options back to wherever they are stored */
   saveGlobal(options: GraphOptions): void;
@@ -61,17 +61,10 @@ interface PresenterInit {
   onSave(): void;
 }
 
-const REASON_TEXT: Record<ClusterMeta["reason"], string> = {
-  direct: "over the folder threshold",
-  entities: "over the folder threshold with its subfolders",
-  budget: "hidden by the node budget",
-  manual: "collapsed by hand",
-};
-
-/** Native's section order, so a `file-menu` from the graph lands where the core plugin's does. */
-const MENU_SECTIONS = [
-  "title", "open", "action", "info", "info.copy", "view", "view.linked", "system", "", "danger",
-];
+/** The clause under a folded folder's name saying why it is folded. */
+function reasonText(reason: ClusterMeta["reason"]): string {
+  return t(`card.reason.${reason}`);
+}
 
 export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
   readonly engine: GraphEngine;
@@ -82,12 +75,12 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
 
   private readonly init: PresenterInit;
   private unsubscribe: (() => void) | null = null;
-  private lastHoverLink: string | null = null;
   private stats: EngineStats | null = null;
   private transient: string | null = null;
   private statusEl: HTMLElement | null = null;
   private cardEl: HTMLElement | null = null;
   private cardFolder: string | null = null;
+  private loadingEl: HTMLElement | null = null;
   private saveTimer = 0;
   private loaded = false;
 
@@ -111,10 +104,13 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     stage.style.position = "relative";
     this.engine.attach();
     this.buildStatusLine();
+    this.loadingEl = stage.createDiv({ cls: "fast-graph-loading" });
     this.unsubscribe = this.init.deps.source.subscribe((next) => this.onRaw(next));
     this.engine.setClusterOptions(this.init.deps.cluster);
     this.engine.setOptions(cloneGraphOptions(this.options));
-    this.onRaw(this.init.deps.source.current());
+    void this.init.deps.source.currentAsync().then((raw) => {
+      if (this.loaded && raw) this.onRaw(raw);
+    });
   }
 
   unload(): void {
@@ -127,6 +123,8 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.cardEl?.remove();
     this.cardEl = null;
     this.cardFolder = null;
+    this.loadingEl?.remove();
+    this.loadingEl = null;
     this.controls.destroy();
     this.engine.destroy();
     this.statusEl?.remove();
@@ -170,6 +168,8 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
   }
 
   private onRaw(raw: RawGraph): void {
+    this.loadingEl?.remove();
+    this.loadingEl = null;
     this.engine.setRaw(raw);
   }
 
@@ -199,7 +199,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
   }
 
   startTimelapse(): void {
-    if (!this.engine.startTimelapse()) this.setStatus("Timelapse is only for the global graph");
+    if (!this.engine.startTimelapse()) this.setStatus(t("status.timelapseGlobalOnly"));
   }
 
   stopTimelapse(): void {
@@ -219,7 +219,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
       return;
     }
     if (node.kind === NodeKind.Tag) {
-      this.openTagSearch(node.label);
+      this.filterTag(node.label);
       return;
     }
     void app.workspace.openLinkText(node.path ?? node.label, "", modEventPaneType(evt));
@@ -232,7 +232,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
       return;
     }
     if (node.kind === NodeKind.Tag) {
-      this.openTagSearch(node.label);
+      this.filterTag(node.label);
       return;
     }
     // unresolved links have nothing to show a menu for - the core plugin agrees
@@ -240,17 +240,14 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     if (!(file instanceof TFile)) return;
 
     const menu = new Menu();
-    addSections(menu, MENU_SECTIONS);
-    setSectionSubmenu(menu, "view.linked", { title: "Open linked view", icon: "lucide-link" });
     const linktext = node.path ?? node.label;
     menu.addItem((item) => {
-      item.setSection("title").setTitle(shortName(file)).setIsLabel(true);
-      asTitleEl(item)?.addClass("u-muted", "u-small");
+      item.setSection("title").setTitle(file.basename).setIsLabel(true);
     });
     menu.addItem((item) => {
       item
         .setSection("open")
-        .setTitle("Open in new tab")
+        .setTitle(t("menu.openInNewTab"))
         .setIcon("lucide-file-plus")
         .onClick(() => void app.workspace.openLinkText(linktext, "", modEventPaneType(evt) || true));
     });
@@ -258,7 +255,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     menu.addItem((item) => {
       item
         .setSection("danger")
-        .setTitle("Delete file")
+        .setTitle(t("menu.deleteFile"))
         .setIcon("lucide-trash-2")
         .setWarning(true)
         .onClick(() => void app.fileManager.promptForDeletion(file));
@@ -266,43 +263,27 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     menu.showAtMouseEvent(evt);
   }
 
-  private openTagSearch(tag: string): void {
-    const plugins = (this.app as unknown as {
-      internalPlugins?: { getEnabledPluginById(id: string): unknown };
-    }).internalPlugins;
-    const search = plugins?.getEnabledPluginById("global-search") as
-      | { openGlobalSearch(query: string): void }
-      | undefined;
-    search?.openGlobalSearch(`tag:${tag}`);
+  private filterTag(tag: string): void {
+    this.options.search = `tag:${tag}`;
+    this.controls.applyOptions(this.options);
+    this.onOptionsChange();
   }
 
   onNodeHover(node: HitNode | null, evt: MouseEvent | null): void {
-    this.unhover();
-    if (!node || !evt) return;
+    if (!node || !evt) {
+      this.hoverPopover = null;
+      return;
+    }
     // native previews files, the local root and attachments - never tags or unresolved links
     if (node.kind !== NodeKind.File && node.kind !== NodeKind.Attachment) return;
     const linktext = node.path ?? node.label;
-    const popover = internalPopover(this.hoverPopover);
-    if (popover && this.lastHoverLink === linktext && popover.state !== 0) {
-      popover.onTarget = true;
-      popover.transition();
-      return;
-    }
-    this.lastHoverLink = linktext;
     this.app.workspace.trigger("hover-link", {
       event: evt,
       source: this.init.deps.hoverSource,
       hoverParent: this,
-      targetEl: null,
+      targetEl: this.stageEl,
       linktext,
     });
-  }
-
-  private unhover(): void {
-    const popover = internalPopover(this.hoverPopover);
-    if (!popover) return;
-    popover.onTarget = false;
-    popover.transition();
   }
 
   // ------------------------------------------------------------- host: chrome
@@ -332,16 +313,22 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     card.createDiv({ cls: "fast-graph-card-title", text: meta.folder || "/" });
     card.createDiv({
       cls: "fast-graph-card-count",
-      text: `${formatInt(meta.fileCount)} note${meta.fileCount === 1 ? "" : "s"} · ${REASON_TEXT[meta.reason]}`,
+      text: `${tp("card.noteCount", meta.fileCount)} · ${reasonText(meta.reason)}`,
     });
 
     const rows = card.createDiv({ cls: "fast-graph-card-stats" });
-    this.cardRow(rows, "Files", `${formatInt(meta.directFiles)} here, ${formatInt(meta.subtreeFiles)} below`);
-    if (meta.childFolders > 0) this.cardRow(rows, "Subfolders", formatInt(meta.childFolders));
-    this.cardRow(rows, "Links in", formatInt(meta.inWeight));
-    this.cardRow(rows, "Links out", formatInt(meta.outWeight));
-    if (meta.internalLinks > 0) this.cardRow(rows, "Internal", `${formatInt(meta.internalLinks)} not drawn`);
-    if (meta.sizeBytes > 0) this.cardRow(rows, "Size", formatBytes(meta.sizeBytes));
+    this.cardRow(
+      rows,
+      t("card.files.label"),
+      t("card.files.value", { here: formatInt(meta.directFiles), below: formatInt(meta.subtreeFiles) }),
+    );
+    if (meta.childFolders > 0) this.cardRow(rows, t("card.subfolders"), formatInt(meta.childFolders));
+    this.cardRow(rows, t("card.linksIn"), formatInt(meta.inWeight));
+    this.cardRow(rows, t("card.linksOut"), formatInt(meta.outWeight));
+    if (meta.internalLinks > 0) {
+      this.cardRow(rows, t("card.internal.label"), tp("card.internal.value", meta.internalLinks));
+    }
+    if (meta.sizeBytes > 0) this.cardRow(rows, t("card.size"), formatBytes(meta.sizeBytes));
 
     if (meta.topFiles.length > 0) {
       const list = card.createDiv({ cls: "fast-graph-card-list" });
@@ -358,8 +345,8 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     card.createDiv({
       cls: "fast-graph-card-hint",
       text: meta.overflow
-        ? `Click for ${formatInt(REVEAL_STEP)} more · right-click to fold up`
-        : `Click to show ${formatInt(REVEAL_STEP)} · right-click to fold`,
+        ? t("card.hintOverflow", { count: formatInt(REVEAL_STEP) })
+        : t("card.hint", { count: formatInt(REVEAL_STEP) }),
     });
   }
 
@@ -403,13 +390,13 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     const stats = this.stats;
     const parts: string[] = [];
     if (stats) {
-      parts.push(`${formatInt(stats.nodes)} nodes`);
-      parts.push(`${formatInt(stats.edges)} links`);
+      parts.push(tp("status.nodes", stats.nodes));
+      parts.push(tp("status.links", stats.edges));
       if (stats.clusters > 0) {
-        parts.push(`${formatInt(stats.clusters)} folders, ${formatInt(stats.collapsedFiles)} notes folded`);
+        parts.push(`${tp("status.folders", stats.clusters)}, ${tp("status.folded", stats.collapsedFiles)}`);
       }
-      parts.push(`build ${stats.buildMs.toFixed(0)} ms`);
-      parts.push(`draw ${stats.renderMs.toFixed(1)} ms`);
+      parts.push(t("status.buildMs", { ms: formatFixed(stats.buildMs, 0) }));
+      parts.push(t("status.drawMs", { ms: formatFixed(stats.renderMs, 1) }));
     }
     if (this.transient) parts.push(this.transient);
     el.setText(parts.join(" · "));
@@ -425,7 +412,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
 
 // ------------------------------------------------------------------ the views
 
-/** Global graph: one shared option object, no per-leaf state, exactly like the core plugin. */
+/** Global graph backed by the plugin's persisted option object. */
 export class FastGraphView extends ItemView {
   private readonly presenter: GraphPresenter;
   private opened = false;
@@ -433,8 +420,6 @@ export class FastGraphView extends ItemView {
   constructor(
     leaf: WorkspaceLeaf,
     private readonly deps: GraphViewDeps,
-    /** the type this view is registered under: "graph" under takeover, our own otherwise */
-    private readonly viewTypeId: string = GRAPH_VIEW_TYPE,
   ) {
     super(leaf);
     this.presenter = new GraphPresenter({
@@ -448,11 +433,11 @@ export class FastGraphView extends ItemView {
   }
 
   getViewType(): string {
-    return this.viewTypeId;
+    return GRAPH_VIEW_TYPE;
   }
 
   getDisplayText(): string {
-    return "Graph view";
+    return t("view.graph");
   }
 
   getIcon(): string {
@@ -473,7 +458,7 @@ export class FastGraphView extends ItemView {
   }
 
   getState(): Record<string, unknown> {
-    // the global graph stores nothing per leaf: everything lives in graph.json
+    // Global options live in the plugin's data.json.
     return {};
   }
 
@@ -517,20 +502,15 @@ export class FastGraphView extends ItemView {
   }
 }
 
-/** Local graph: bound to a file, per-leaf options ride in workspace.json. */
-export class FastLocalGraphView extends FileView {
-  allowNoFile = true;
-
+/** Local graph rooted on a saved file path, with per-leaf options. */
+export class FastLocalGraphView extends ItemView {
   private readonly presenter: GraphPresenter;
-  private renderedPath: string | null = null;
-  private updateTimer = 0;
+  private rootFile: TFile | null = null;
   private opened = false;
 
   constructor(
     leaf: WorkspaceLeaf,
     deps: GraphViewDeps,
-    /** the type this view is registered under: "localgraph" under takeover, our own otherwise */
-    private readonly viewTypeId: string = LOCAL_GRAPH_VIEW_TYPE,
   ) {
     super(leaf);
     this.presenter = new GraphPresenter({
@@ -544,26 +524,17 @@ export class FastLocalGraphView extends FileView {
   }
 
   getViewType(): string {
-    return this.viewTypeId;
+    return LOCAL_GRAPH_VIEW_TYPE;
   }
 
   getDisplayText(): string {
-    const file = this.file;
-    if (file && this.isLeafBoundToFile) return `Graph of ${file.basename}`;
-    return "Local graph";
+    const file = this.rootFile;
+    if (file) return t("view.graphOfFile", { name: file.basename });
+    return t("view.localGraph");
   }
 
   getIcon(): string {
     return "lucide-git-fork";
-  }
-
-  canAcceptExtension(): boolean {
-    return true;
-  }
-
-  get isLeafBoundToFile(): boolean {
-    const leaf = this.leaf as WorkspaceLeaf & { pinned?: boolean; group?: string | null };
-    return !!leaf.pinned || !!leaf.group;
   }
 
   async onOpen(): Promise<void> {
@@ -571,33 +542,29 @@ export class FastLocalGraphView extends FileView {
     this.opened = true;
     this.presenter.load();
     this.registerEvent(this.app.workspace.on("css-change", () => this.presenter.cssChanged()));
-    this.registerEvent(this.app.workspace.on("file-open", (file) => this.followFile(file)));
-    this.registerEvent(this.leaf.on("pinned-change", () => this.syncGroup()));
-    this.registerEvent(this.leaf.on("group-change", () => this.syncGroup()));
-    this.requestUpdate();
+    this.presenter.engine.setScope(this.rootFile?.path ?? null);
     requestAnimationFrame(() => this.presenter.resize());
   }
 
   async onClose(): Promise<void> {
     this.opened = false;
-    if (this.updateTimer !== 0) window.clearTimeout(this.updateTimer);
     this.presenter.unload();
   }
 
   getState(): Record<string, unknown> {
-    return { ...super.getState(), options: this.presenter.options };
+    return { file: this.rootFile?.path ?? null, options: this.presenter.options };
   }
 
-  async setState(state: unknown, result: ViewStateResult): Promise<void> {
-    const st = { ...((state ?? {}) as Record<string, unknown>) };
+  async setState(state: unknown, _result: ViewStateResult): Promise<void> {
+    const st = (state ?? {}) as Record<string, unknown>;
     const options = st.options;
     if (options && typeof options === "object") this.presenter.applyStateOptions(options as Partial<GraphOptions>);
-    // a pane restored without a file shows the note that is open now
-    if (st.file === undefined && !("group" in st) && !this.isLeafBoundToFile) {
-      st.file = this.app.workspace.getActiveFile()?.path ?? null;
+    const path = typeof st.file === "string" ? st.file : this.app.workspace.getActiveFile()?.path;
+    const candidate = path ? this.app.vault.getAbstractFileByPath(path) : null;
+    this.rootFile = candidate instanceof TFile ? candidate : null;
+    if (this.opened) {
+      this.presenter.engine.setScope(this.rootFile?.path ?? null);
     }
-    await super.setState(st, result);
-    this.requestUpdate();
   }
 
   onResize(): void {
@@ -615,62 +582,6 @@ export class FastLocalGraphView extends FileView {
   onPaneMenu(menu: Menu, source: string): void {
     super.onPaneMenu(menu, source);
     addScreenshotItem(menu, this.presenter);
-  }
-
-  private followFile(file: TFile | null): void {
-    if (this.isLeafBoundToFile) return;
-    void this.switchFile(file);
-  }
-
-  private syncGroup(): void {
-    if (!this.isLeafBoundToFile) {
-      void this.switchFile(this.app.workspace.getActiveFile());
-      return;
-    }
-    const shared = this.groupFile();
-    if (shared !== null) void this.switchFile(shared);
-  }
-
-  /** The file the rest of this leaf's group is showing, if any. */
-  private groupFile(): TFile | null {
-    const group = (this.leaf as WorkspaceLeaf & { group?: string | null }).group;
-    if (!group) return null;
-    let found: TFile | null = null;
-    this.app.workspace.iterateAllLeaves((leaf) => {
-      if (found !== null || leaf === this.leaf) return;
-      if ((leaf as WorkspaceLeaf & { group?: string }).group !== group) return;
-      const view = leaf.view;
-      if (view instanceof FileView && view.file) found = view.file;
-    });
-    return found;
-  }
-
-  private async switchFile(file: TFile | null): Promise<void> {
-    if (this.file === file) return;
-    // FileView.loadFile does the TFile user bookkeeping; it is not in the public typings
-    const load = (this as unknown as { loadFile?: (f: TFile | null) => unknown }).loadFile;
-    if (load) await load.call(this, file);
-    else this.file = file;
-    (this.leaf as unknown as { updateTitle?: () => void }).updateTitle?.();
-    this.requestUpdate();
-  }
-
-  private requestUpdate(): void {
-    if (this.updateTimer !== 0) return;
-    this.updateTimer = window.setTimeout(() => {
-      this.updateTimer = 0;
-      this.update();
-    }, 10);
-  }
-
-  private update(): void {
-    const path = this.file?.path ?? null;
-    if (path === this.renderedPath) {
-      if (this.opened) this.presenter.engine.invalidate();
-      return;
-    }
-    this.renderedPath = path;
-    this.presenter.engine.setScope(path);
   }
 
   private save(): void {
@@ -698,12 +609,12 @@ function isModKey(evt: MouseEvent): boolean {
   return /Mac/.test(platform) ? evt.metaKey : evt.ctrlKey;
 }
 
-/** `Copy screenshot` in the pane menu, worded the way the core plugin words it. */
+/** The pane menu's screenshot entry, in the section the core plugin puts it in. */
 function addScreenshotItem(menu: Menu, presenter: GraphPresenter): void {
   menu.addItem((item) => {
     item
       .setSection("action")
-      .setTitle("Copy screenshot")
+      .setTitle(t("menu.copyScreenshot"))
       .setIcon("lucide-image")
       .onClick(() => {
         const dataUrl = presenter.screenshot();
@@ -721,51 +632,15 @@ async function copyPng(dataUrl: string): Promise<void> {
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
     const blob = new Blob([bytes], { type: "image/png" });
     const clipper = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
-    if (!clipper) throw new Error("Clipboard images are not supported here");
+    if (!clipper) {
+      new Notice(t("notice.clipboardUnsupported"));
+      return;
+    }
     await navigator.clipboard.write([new clipper({ "image/png": blob })]);
-    new Notice("Screenshot copied to the clipboard.");
+    new Notice(t("notice.screenshotCopied"));
   } catch (error) {
     new Notice(error instanceof Error ? error.toString() : String(error));
   }
-}
-
-/** `Menu.addSections` and `setSectionSubmenu` order the core plugin's menu; neither is typed. */
-function addSections(menu: Menu, sections: string[]): void {
-  (menu as unknown as { addSections?: (sections: string[]) => void }).addSections?.(sections);
-}
-
-function setSectionSubmenu(menu: Menu, section: string, info: { title: string; icon: string }): void {
-  (menu as unknown as {
-    setSectionSubmenu?: (section: string, info: { title: string; icon: string }) => void;
-  }).setSectionSubmenu?.(section, info);
-}
-
-function asTitleEl(item: unknown): HTMLElement | null {
-  const el = (item as { titleEl?: HTMLElement }).titleEl;
-  return el ?? null;
-}
-
-/** The core plugin labels the menu with `getShortName()`, which disambiguates same-named notes. */
-function shortName(file: TFile): string {
-  const fn = (file as unknown as { getShortName?: () => string }).getShortName;
-  return fn ? fn.call(file) : file.basename;
-}
-
-/** Page preview's popover: `state`, `onTarget` and `transition` are all internal. */
-function internalPopover(popover: HoverPopover | null): {
-  state: number;
-  onTarget: boolean;
-  transition: () => void;
-} | null {
-  if (!popover) return null;
-  return (popover as unknown as { state?: number; onTarget?: boolean; transition?: () => void })
-    .state === undefined
-    ? null
-    : (popover as unknown as { state: number; onTarget: boolean; transition: () => void });
-}
-
-function formatInt(n: number): string {
-  return n.toLocaleString("en-US");
 }
 
 function formatBytes(bytes: number): string {
@@ -776,5 +651,5 @@ function formatBytes(bytes: number): string {
     value /= 1024;
     unit++;
   }
-  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+  return `${formatFixed(value, unit === 0 ? 0 : 1)} ${units[unit]}`;
 }

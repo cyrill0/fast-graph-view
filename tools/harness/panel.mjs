@@ -4,8 +4,6 @@
 //
 // The panel floats above the canvas, so aiming is by element rect rather than node position.
 
-import { readFileSync } from 'node:fs';
-
 const FRAME_SOURCE = `(async () => {
   const windows = [];
   for (let w = 0; w < 2; w++) {
@@ -42,7 +40,7 @@ const CONTEXT = `(() => {
     window.Worker = Wrapped;
   }
   const app = window.app;
-  const leaf = () => app.workspace.getLeavesOfType('graph')[0] ?? null;
+  const leaf = () => app.workspace.getLeavesOfType('fast-graph-view')[0] ?? null;
   window.__p = {
     leaf,
     view: () => leaf()?.view ?? null,
@@ -186,24 +184,30 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
       })()`),
     );
 
-  /** centre of the control inside the panel row whose setting name contains `text` */
-  const named = async (what, text) =>
+  /**
+   * Centre of the control inside the panel row for a `GraphOptions` key.
+   *
+   * Found by `data-fgv-option`, not by label text: the labels are translated, so
+   * text matching would silently find nothing under a non-English Obsidian and
+   * every step below would report "skipped" instead of failing.
+   */
+  const control = async (what, key) =>
     json(
       await evalJs(`(function () {
         const panel = window.__p.panel();
         if (!panel) return null;
-        const rows = [...panel.querySelectorAll('.setting-item')].filter((r) =>
-          (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase().includes(${JSON.stringify(text.toLowerCase())}));
-        const el = rows[0]?.querySelector(${JSON.stringify(
+        const row = panel.querySelector(${JSON.stringify(`[data-fgv-option="${key}"]`)})?.closest('.setting-item');
+        const el = row?.querySelector(${JSON.stringify(
           what === 'toggle' ? '.checkbox-container' : what === 'slider' ? 'input[type=range]' : 'input',
         )});
         if (!el) return null;
+        const label = row.querySelector('.setting-item-name')?.textContent ?? key;
         const b = el.getBoundingClientRect();
         // a hidden row reports a 0x0 rect at the page origin; that is not a clickable target
         if (b.width < 4 || b.height < 4) {
-          return JSON.stringify({ hidden: true, label: rows[0].querySelector('.setting-item-name').textContent, w: Math.round(b.width), h: Math.round(b.height) });
+          return JSON.stringify({ hidden: true, label, w: Math.round(b.width), h: Math.round(b.height) });
         }
-        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), label: rows[0].querySelector('.setting-item-name').textContent, rows: rows.length, hidden: false });
+        return JSON.stringify({ x: Math.round(b.left + b.width / 2), y: Math.round(b.top + b.height / 2), w: Math.round(b.width), h: Math.round(b.height), label, hidden: false });
       })()`),
     );
 
@@ -223,15 +227,15 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
   await step('freshView', async () => {
     const opened = await evalJs(`(async () => {
       const app = window.app;
-      app.workspace.detachLeavesOfType('graph');
+      app.workspace.detachLeavesOfType('fast-graph-view');
       await new Promise((r) => setTimeout(r, 500));
-      app.commands.executeCommandById('graph:open');
+      app.commands.executeCommandById('fast-graph-view:open');
       for (let i = 0; i < 80; i++) {
         if (window.__p.engine()?.model) break;
         await new Promise((r) => setTimeout(r, 250));
       }
       const e = window.__p.engine();
-      return JSON.stringify({ leaves: app.workspace.getLeavesOfType('graph').length, nodes: e?.model?.nodeCount ?? null });
+      return JSON.stringify({ leaves: app.workspace.getLeavesOfType('fast-graph-view').length, nodes: e?.model?.nodeCount ?? null });
     })()`);
     return json(opened);
   });
@@ -283,65 +287,52 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
       if (at?.skipped) return at;
       const read = () =>
         evalJs(`JSON.stringify({ icon: document.querySelector('.graph-controls .mod-${s} .collapse-icon').hasClass('is-collapsed'), option: window.__p.options()['${collapseKey[s]}'], bodyHeight: Math.round(document.querySelector('.graph-controls .mod-${s} .tree-item-children').getBoundingClientRect().height) })`).then(json);
-      // the store the core plugin owns, because that is where a collapse flag has to land
       const stored = async () =>
-        json(await evalJs(`(function () {
+        json(await evalJs(`(async function () {
           const key = ${JSON.stringify(collapseKey[s])};
-          const core = window.app.internalPlugins?.getEnabledPluginById?.('graph');
-          return JSON.stringify({ live: core?.options?.[key] ?? null, base: window.app.vault.adapter.basePath ?? null });
+          const plugin = window.app.plugins.getPlugin('fast-graph-view');
+          const saved = await plugin?.loadData?.();
+          return JSON.stringify({ live: plugin?.settings?.graph?.[key] ?? null, saved: saved?.graph?.[key] ?? null });
         })()`));
-      /** the vault's own graph.json, read from disk: an in-memory copy proves nothing */
-      const onDisk = async (base) => {
-        if (!base) return { skipped: 'no vault path' };
-        try {
-          const j = JSON.parse(readFileSync(`${base}/.obsidian/graph.json`, 'utf8'));
-          return { file: j[collapseKey[s]] ?? null, keys: Object.keys(j).length };
-        } catch (e) {
-          return { failed: String(e.message ?? e) };
-        }
-      };
       const after = await read();
       const storedAfter = await stored();
-      const diskAfter = await onDisk(storedAfter?.base);
       const at2 = await clickSel(sel, 500);
       const restored = await read();
       await sleep(600);
       const storedRestored = await stored();
-      return { at, after, storedAfter, diskAfter, restored, storedRestored, diskRestored: await onDisk(storedRestored?.base), at2 };
+      return { at, after, storedAfter, restored, storedRestored, at2 };
     });
   }
 
   // filter toggles rebuild the model, so node counts must follow the option
   await step('openFilter', () => ensureOpen('filter'));
-  const switchState = async (label) =>
+  const switchState = async (key) =>
     json(
       await evalJs(`(function () {
-        const row = [...window.__p.panel().querySelectorAll('.setting-item')].find((r) =>
-          (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase().includes(${JSON.stringify(label.toLowerCase())}));
+        const row = window.__p.panel().querySelector(${JSON.stringify(`[data-fgv-option="${key}"]`)})?.closest('.setting-item');
         const box = row?.querySelector('.checkbox-container');
         return JSON.stringify({ name: row?.querySelector('.setting-item-name')?.textContent ?? null, enabled: box ? box.hasClass('is-enabled') : null, input: box?.querySelector('input')?.checked ?? null });
       })()`),
     );
-  for (const [label, keyName] of [['tags', 'showTags'], ['attachments', 'showAttachments'], ['orphans', 'showOrphans']]) {
+  for (const keyName of ['showTags', 'showAttachments', 'showOrphans']) {
     await step(`toggle_${keyName}`, async () => {
-      const at = await named('toggle', label);
-      if (!at) return { skipped: `no toggle matching "${label}"` };
-      if (at.hidden) return { skipped: `toggle "${label}" hidden in a collapsed section`, at };
+      const at = await control('toggle', keyName);
+      if (!at) return { skipped: `no toggle row for ${keyName}` };
+      if (at.hidden) return { skipped: `toggle ${keyName} ("${at.label}") hidden in a collapsed section`, at };
       const v0 = await evalJs(`window.__p.options().${keyName}`);
-      const d0 = await switchState(label);
+      const d0 = await switchState(keyName);
       const n0 = await snapshot();
       const click = await clickAt(at, 900);
       const v1 = await evalJs(`window.__p.options().${keyName}`);
-      const d1 = await switchState(label);
+      const d1 = await switchState(keyName);
       const settled = await settle(45000);
       const n1 = await snapshot();
-      const at2 = await named('toggle', label);
+      const at2 = await control('toggle', keyName);
       await clickAt(at2, 900);
       const v2 = await evalJs(`window.__p.options().${keyName}`);
       const restored = await settle(45000);
       return {
         label: at.label,
-        rows: at.rows,
         click,
         before: v0,
         domBefore: d0,
@@ -466,7 +457,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
   // sliders: arrow keys on a focused range input are the native keyboard interaction
   await step('sliderKeys', async () => {
     const open = await ensureOpen('display');
-    const at = await named('slider', 'node size');
+    const at = await control('slider', 'nodeSizeMultiplier');
     if (!at) return { open, skipped: 'no node size slider' };
     if (at.hidden) return { open, skipped: `slider "${at.label}" hidden`, at };
     const v0 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
@@ -477,12 +468,12 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     const v1 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     // read the row that was driven, not the first slider in the section
     const domValue = await evalJs(`(function () {
-      const rows = [...document.querySelectorAll('.graph-controls .mod-display .setting-item')].filter((r) => (r.querySelector('.setting-item-name')?.textContent ?? '').toLowerCase().includes('node size'));
-      const el = rows[0]?.querySelector('input[type=range]');
+      const row = document.querySelector('.graph-controls .mod-display [data-fgv-option="nodeSizeMultiplier"]');
+      const el = row?.querySelector('input[type=range]');
       return el ? Number(el.value) : null;
     })()`);
     const focused = await evalJs(`document.activeElement?.className ?? null`);
-    await clickAt(await named('slider', 'node size'), 200);
+    await clickAt(await control('slider', 'nodeSizeMultiplier'), 200);
     const afterClick2 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
     for (let i = 0; i < 5; i++) await key('ArrowLeft', { waitMs: 120 });
     const v2 = await evalJs(`window.__p.options().nodeSizeMultiplier`);
@@ -634,7 +625,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     await ensureOpen('filter');
     const base = await evalJs(CAM).then(json);
 
-    const at = await named('toggle', 'orphans');
+    const at = await control('toggle', 'showOrphans');
     if (!at || at.hidden) return { skipped: 'orphans switch not reachable', at };
     await clickAt(at, 500);
     const onSwitch = await evalJs(CAM).then(json);
@@ -651,7 +642,7 @@ export default async function ({ evalJs, mouse, key, type, shot, sleep, wake, ra
     await key('Equal', { waitMs: 200 });
     const afterField = await evalJs(CAM).then(json);
 
-    await clickAt(await named('toggle', 'orphans'), 900);
+    await clickAt(await control('toggle', 'showOrphans'), 900);
     const restored = await settle(45000);
     return {
       base, onSwitch, afterSwitch,

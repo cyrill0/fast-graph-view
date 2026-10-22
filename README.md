@@ -1,11 +1,11 @@
 # Fast Graph View
 
-A from-scratch replacement for Obsidian's graph view, built to stay responsive in vaults
+A standalone alternative to Obsidian's graph view, built to stay responsive in vaults
 where the built-in view drops to a slideshow. Its defining rule: **a folder holding more
 than a configurable number of files (default 20) is drawn as one metadata node instead of
 one node per note.** Everything else behaves the way the built-in graph view does — same
 filters, same forces, same colour groups, same right-click menus, same hover preview rules,
-same saved configuration.
+familiar controls, its own saved configuration, and the same app language.
 
 For a user-focused walkthrough, see the [Fast Graph View user guide](docs/USER_GUIDE.md).
 
@@ -23,8 +23,8 @@ The plugin is the three files at the repository root: `main.js`, `styles.css`,
 
 ### Publish a GitHub release
 
-Set the same stable version in `manifest.json` and `package.json`, and add its
-`minAppVersion` to `versions.json`. After committing those changes, push a matching tag
+Set the same stable version in `manifest.json` and `package.json`, and map that version
+directly to its minimum app-version string in `versions.json`. After committing those changes, push a matching tag
 such as `v1.2.3`. GitHub Actions checks the version metadata, builds the plugin, and creates
 a release with the three files Obsidian needs (`main.js`, `manifest.json`, and `styles.css`).
 Run `pnpm check:release` before tagging to check the metadata locally.
@@ -58,7 +58,7 @@ each build. Set `OBSIDIAN_VAULT=/path/to/another/vault` to deploy to a different
 
 Measured on a 27,266-note vault: **1,546 drawn nodes · 4,795 links · 24 folder clusters
 holding 26,942 notes, model build 42 ms, one frame 0.4–0.5 ms** (status line of the view,
-takeover mode, desktop Obsidian 1.14.4).
+desktop Obsidian 1.14.4).
 
 ## Folder aggregation
 
@@ -77,25 +77,18 @@ below, links in, links out, internal links that are not drawn, and total size.
 - Tag and unresolved nodes are capped separately (`maxMetadataNodes`, default 1,200) — in a
   large vault those are the other two ways a graph becomes unreadable.
 
-## Taking over the built-in view
+## Standalone Obsidian integration
 
-`takeover` (on by default) re-registers the `graph` and `localgraph` view creators, the
-ribbon icon, the command palette entries and the "Open in graph view" file-menu items, so
-every existing keybinding, ribbon click and internal link into the graph lands here. Turning
-it off puts the core plugin's creators back untouched.
+Fast Graph View registers its own `fast-graph-view` and `fast-localgraph` view types through
+Obsidian's public plugin API. It does not unregister, replace, or modify the built-in graph
+plugin. The ribbon button and **Open clustered graph** command open the global view. The
+**Open clustered local graph** command and Markdown file-menu entry open a local view rooted
+on the selected note.
 
-Flipping that toggle while panes are open re-registers those panes under the type that is valid
-in the new mode - ours when takeover goes off, the core types when it comes back on - so nothing
-is left behind as a placeholder the next start cannot restore.
-
-Configuration is interchangeable: the graph options use the core plugin's keys, ranges and
-defaults verbatim, so `.obsidian/graph.json` written by the built-in view reads straight
-into this plugin, and per-leaf state (zoom, pan, filters) round-trips through the same
-`setState` shape. The clustering options are ours and live in the plugin's `data.json`.
-
-Local graph works the same way it does natively — rooted on the active file, following
-backlinks/forelinks/interlinks, `localJumps` depth, pinned leaves keep their root — with
-clustering applied inside it too (`clusterLocalGraphs`).
+Graph and clustering options are saved in this plugin's `data.json`. Local graph options and
+the fixed root file are saved in the leaf state, so restored local panes return to the same
+note. The option names, ranges, and defaults intentionally remain familiar, but the plugin no
+longer reads or writes the built-in plugin's private configuration.
 
 ## Interactions
 
@@ -104,17 +97,25 @@ the drag and releases it on pointerup so it rejoins the layout — the same thin
 view does, verified against its `forceNode` messages — plain click on a note opens it in the
 same leaf with history that takes you back to the graph, `Ctrl`/`⌘`-click and middle-click
 open a new tab, `Ctrl`/`⌘`+`Alt` splits, `Ctrl`/`⌘`+`Alt`+`Shift` opens a new window, tag
-nodes open a tag search, and the control panel — filter, colour groups, display, forces —
-matches the native one including drag-to-reorder groups. Hovering a note opens the core page
-preview under the same modifier rule the core plugin registers for its own graph
-(`defaultMod`), so plain hover dims the rest of the graph and Mod-held hover previews.
+nodes filter the current graph to that tag, and the control panel — filter, colour groups,
+display, forces — matches the native one including drag-to-reorder groups. Hovering a note
+opens Obsidian's page preview through this plugin's registered hover source (`defaultMod`), so
+plain hover dims the rest of the graph and Mod-held hover previews.
 
-On Obsidian Mobile, a one-finger swipe pans, tapping a node opens it, and a two-finger pinch
-zooms. Mobile uses a smaller rendering budget (650 file and folder nodes, up to 250 tag and
-unresolved nodes combined, 160 labels, and a 1.5 device-pixel-ratio cap) to keep large vaults
-responsive. Folder folding is
-enabled for the mobile view even if it is disabled in the saved desktop settings; those saved
-settings are not changed.
+On Obsidian Mobile, a one-finger swipe pans, tapping a node opens it, a two-finger pinch zooms,
+and a long press performs the node's context action. Colour groups can also be reordered with
+touch. The view starts with a performance profile selected from the phone's available CPU,
+memory (when the WebView reports it), screen size and pixel density, then watches actual frame
+cost. If a low-end Android device or iPhone falls behind, it quickly reduces labels, arrows,
+canvas resolution, physics frequency and worker-to-screen updates. Quality comes back only
+after a longer stable period, preventing visible oscillation. Pan and pinch temporarily use an
+even cheaper profile, while an emergency topology budget is reserved as the final fallback.
+
+These reductions apply only to the open mobile view. They never overwrite desktop graph
+settings. Folder folding stays enabled on mobile even if disabled in the saved desktop settings.
+Initial vault indexing is shared by all graph panes and deferred until the pane has painted its
+controls and loading indicator. Physics pauses while Obsidian is in the background and resumes
+on return; orientation changes and recoverable WebGL context loss rebuild the canvas safely.
 
 Search supports the operators the native graph has: `"exact"`, `tag:`/`#`, `path:`/`folder:`,
 `file:`/`name:`, `ext:`, `link:`/`to:`, `backlink:`/`from:`, `is:orphan`, and `-` negation,
@@ -136,7 +137,16 @@ Deliberate departures from the built-in view, and why:
 - **No body-text or property search operators.** Links come from `metadataCache`, which
   does not index search over content; adding it would mean reading every file, which is the
   thing this plugin exists to avoid.
-- **Hardcoded English** UI strings. No locale catalogues are shipped.
+- **The UI language is Obsidian's, with no picker of its own.** Catalogues for English,
+  German, French, Spanish, Italian, Brazilian Portuguese, Russian, Polish, Japanese,
+  Simplified Chinese and Korean ship inside `main.js`, so the three-file install contract is
+  unchanged and the panel, settings tab, hover card, status line, commands and canvas folder
+  labels all follow the app language. Counts are pluralised per language through
+  `Intl.PluralRules`, which matters for Russian and Polish and for French treating zero as
+  singular. A traditional-Chinese Obsidian falls back to English rather than to Simplified,
+  since the two are not interchangeable scripts. The few diagnostics interpolated into a
+  fallback status message — a WebGL failure reason, a worker crash — stay in English, as does
+  any exception text the browser itself supplies.
 - **No inline search autocomplete and no `is-loading` spinner** in the filter field. The
   model rebuild is 42 ms at 27k notes, which is not a wait worth a spinner.
 - **Panel sections snap collapsed/expanded** instead of animating their height.
@@ -145,12 +155,17 @@ Deliberate departures from the built-in view, and why:
 - **Options are per-view clones** of the global settings, exactly as core does it, so
   changing forces in one graph leaf does not move another.
 - **The status line and the cluster hover card are additions** with no native equivalent.
+- **Drawn labels are cut to `maxLabelChars` (default 24)**, which native does not do. A vault
+  whose median title is 37 characters — and whose unresolved links are labelled with their
+  whole linktext, path included — otherwise overlaps 900 px strings across the graph. Only the
+  canvas sees the cut: filters, node identity, hover preview and the file menu keep the full
+  label, and the hovered node is always drawn whole. `0` turns shortening off.
 - `isModEvent` is reimplemented locally as `modEventPaneType` (the helper is not exported).
 - **Zoom and pan persist when the loop idles**, not on every frame — one write per settle.
 - **A restored local-graph leaf falls back to the active file only when its saved state
-  carries no `file`**, so reopening a pinned local graph does not silently re-root.
-- **Hover preview on a note requires the Mod key**, because core registers the `graph`
-  hover source with `defaultMod: true`. Plain hover is not a preview in either view.
+  carries no `file`**, so reopening a saved local graph does not silently re-root.
+- **Hover preview on a note requires the Mod key** because this plugin registers its hover
+  source with `defaultMod: true`; plain hover only emphasizes graph neighbors.
 - Folders are the only aggregation. Tags and unresolved links are capped by count, not
   folded, because they have no natural hierarchy to fold along.
 
@@ -161,8 +176,7 @@ Deliberate departures from the built-in view, and why:
 (`--remote-debugging-port=9223`) with trusted `Input` events, and `tools/harness/*.mjs`
 are the scenarios it runs: `trusted.mjs` (hover, click, right-click, wheel, pan, node drag,
 idle-loop, click navigation), `panel.mjs` (control panel), `local.mjs` (local graph),
-`standalone.mjs` (running without the takeover of the built-in view, and the listener and
-worker teardown when the plugin is disabled), and `crash-watch.mjs` (renderer reload journaling).
+`standalone.mjs` (standalone registration and teardown), and `crash-watch.mjs` (renderer reload journaling).
 
 The instance has to be launched so that it keeps producing frames while another window is on
 top of it — otherwise Chromium stops its frame sink, `requestAnimationFrame` freezes, and
@@ -178,4 +192,3 @@ flatpak run md.obsidian.Obsidian \
 ## License
 
 [MIT](LICENSE)
-

@@ -35,6 +35,10 @@ export class SimulationDriver {
   private options: DriverOptions;
   private pendingInit: InitMessage | null = null;
   private lastInit: InitMessage | null = null;
+  private simulationHz = 60;
+  private publishHz = 60;
+  private inlinePublishAccumulator = 0;
+  private paused = false;
   private destroyed = false;
 
   constructor(options: DriverOptions) {
@@ -64,6 +68,8 @@ export class SimulationDriver {
       };
       this.worker = worker;
       this.workerUrl = url;
+      worker.postMessage({ type: "cadence", simulationHz: this.simulationHz, publishHz: this.publishHz });
+      if (this.paused) worker.postMessage({ type: "pause", paused: true });
       if (this.pendingInit) {
         const msg = this.pendingInit;
         this.pendingInit = null;
@@ -99,24 +105,31 @@ export class SimulationDriver {
     core.setConfig(msg.config);
     core.alpha = msg.alpha;
     core.alphaTarget = 0;
+    this.inlinePublishAccumulator = 0;
     this.runInlineLoop();
   }
 
   private runInlineLoop(): void {
-    if (this.inlineTimer !== null || this.destroyed) return;
+    if (this.inlineTimer !== null || this.destroyed || this.paused) return;
     const tick = () => {
+      this.inlineTimer = null;
       const core = this.inline;
-      if (!core || this.destroyed) return;
+      if (!core || this.destroyed || this.paused) return;
       core.step();
-      this.options.onFrame(core.positions(), {
-        alpha: core.alpha,
-        settled: core.isSettled(),
-        ticks: core.ticks,
-      });
-      this.inlineTimer = core.alpha <= ALPHA_MIN ? null : requestAnimationFrame(tick);
-      if (this.inlineTimer === null) return;
+      this.inlinePublishAccumulator += this.publishHz;
+      if (this.inlinePublishAccumulator >= this.simulationHz || core.alpha <= ALPHA_MIN) {
+        this.inlinePublishAccumulator -= this.simulationHz;
+        this.options.onFrame(core.positions(), {
+          alpha: core.alpha,
+          settled: core.isSettled(),
+          ticks: core.ticks,
+        });
+      }
+      if (core.alpha > ALPHA_MIN) {
+        this.inlineTimer = window.setTimeout(tick, 1000 / this.simulationHz);
+      }
     };
-    this.inlineTimer = requestAnimationFrame(tick);
+    this.inlineTimer = window.setTimeout(tick, 1000 / this.simulationHz);
   }
 
   private post(message: unknown, transfer?: Transferable[]): void {
@@ -129,6 +142,9 @@ export class SimulationDriver {
       if (msg.type === "publish") this.returnBuffer(msg.pos);
       return;
     }
+    // The worker is now proven healthy. Release the fallback copy so mobile
+    // does not retain a second complete simulation for the life of the view.
+    this.lastInit = null;
     this.options.onFrame(msg.pos, { alpha: msg.alpha, settled: msg.settled, ticks: msg.ticks });
     this.returnBuffer(msg.pos);
   }
@@ -146,13 +162,17 @@ export class SimulationDriver {
    */
   update(model: GraphModel, radius: Float32Array, alpha = ALPHA_START): void {
     this.revision = model.revision;
+    // Only positions need a private fallback snapshot because the worker takes
+    // ownership of model.pos. Topology arrays are immutable and collision
+    // radii stay alive in the engine, so retaining references avoids three
+    // full-array copies on every large-vault rebuild.
     this.lastInit = {
       type: "init",
       revision: model.revision,
       pos: model.pos.slice(),
-      eu: model.eu.slice(),
-      ev: model.ev.slice(),
-      radius: radius.slice(),
+      eu: model.eu,
+      ev: model.ev,
+      radius,
       config: { ...this.config },
       alpha,
     };
@@ -183,6 +203,34 @@ export class SimulationDriver {
       this.inline.setConfig(this.config);
       this.inline.setCharge(this.config.charge);
       this.inline.reheat(reheat);
+      this.runInlineLoop();
+    }
+  }
+
+  /** Tune physics and transfer frequency without rebuilding the model. */
+  setCadence(simulationHz: number, publishHz: number): void {
+    this.simulationHz = Math.max(5, Math.min(60, simulationHz));
+    this.publishHz = Math.max(5, Math.min(this.simulationHz, publishHz));
+    if (this.worker) {
+      this.post({ type: "cadence", simulationHz: this.simulationHz, publishHz: this.publishHz });
+    } else if (this.inline) {
+      if (this.inlineTimer !== null) {
+        window.clearTimeout(this.inlineTimer);
+        this.inlineTimer = null;
+      }
+      this.runInlineLoop();
+    }
+  }
+
+  /** Stop consuming CPU while Obsidian is backgrounded or the pane is hidden. */
+  setPaused(paused: boolean): void {
+    if (this.paused === paused) return;
+    this.paused = paused;
+    if (this.worker) this.post({ type: "pause", paused });
+    if (paused && this.inlineTimer !== null) {
+      window.clearTimeout(this.inlineTimer);
+      this.inlineTimer = null;
+    } else if (!paused) {
       this.runInlineLoop();
     }
   }
@@ -239,7 +287,7 @@ export class SimulationDriver {
   destroy(): void {
     this.destroyed = true;
     if (this.inlineTimer !== null) {
-      cancelAnimationFrame(this.inlineTimer);
+      window.clearTimeout(this.inlineTimer);
       this.inlineTimer = null;
     }
     if (this.worker) {

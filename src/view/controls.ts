@@ -1,10 +1,11 @@
 /** The floating control panel, section for section.
  *
  *  Every class name, label, tooltip, range and step below is what the core
- *  `graph` plugin builds, so the panel is styled by the rules already in
- *  `app.css` and the persisted keys stay interchangeable with `.obsidian/graph.json`.
+ *  built-in graph uses, so the panel can reuse Obsidian's graph styling while
+ *  the plugin persists its own validated settings.
  *
- *  Strings are hardcoded because `app.plugins.graphView` is not public API.
+ *  The labels come from this plugin's own catalogues, which follow Obsidian's
+ *  language setting - not from the core plugin, whose strings are not public API.
  */
 
 import {
@@ -19,50 +20,58 @@ import {
 } from "obsidian";
 import type { ColorGroup } from "../graph/build";
 import { DEFAULT_GRAPH_OPTIONS, type GraphOptions } from "../settings";
+import { t } from "../i18n";
 
+/**
+ * The panel's strings, read from the catalogue on access.
+ *
+ * Getters rather than values: this module is evaluated at import time, before
+ * `src/main.ts` injects the app language, so a plain `t()` here would freeze the
+ * whole panel in English. Key names match the `panel.*` catalogue keys exactly.
+ */
 const TEXT = {
-  filters: "Filters",
-  groups: "Groups",
-  display: "Display",
-  forces: "Forces",
-  searchFiles: "Search files...",
-  clearSearch: "Clear search",
-  depth: "Depth",
-  depthDescription: "Show nodes this number of links away",
-  incoming: "Incoming links",
-  incomingDescription: "Show links from other files",
-  outgoing: "Outgoing links",
-  outgoingDescription: "Show links to other files",
-  neighbor: "Neighbor links",
-  neighborDescription: "Show links between neighbors",
-  tags: "Tags",
-  tagsDescription: "Tags are linked to the files that contain them",
-  attachments: "Attachments",
-  attachmentsDescription: "Show attachments",
-  existingOnly: "Existing files only",
-  existingOnlyDescription: "When enabled, links to nonexistent files are not shown",
-  orphans: "Orphans",
-  orphansDescription: "Show files that are not linked to any other file",
-  arrows: "Arrows",
-  arrowsDescription: "Show arrows when zoomed in",
-  textFade: "Text fade threshold",
-  nodeSize: "Node size",
-  linkThickness: "Link thickness",
-  centerForce: "Center force",
-  repelForce: "Repel force",
-  linkForce: "Link force",
-  linkDistance: "Link distance",
-  enterQuery: "Enter query...",
-  deleteGroup: "Delete group",
-  newGroup: "New group",
-  swatchTooltip: "Click to change color\nDrag to reorder groups",
-  animate: "Animate",
-  stop: "Stop",
-  close: "Close",
-  openSettings: "Open graph settings",
-  startTimelapse: "Start timelapse animation",
-  stopTimelapse: "Stop timelapse animation",
-  restoreDefaults: "Restore default settings",
+  get filters(): string { return t("panel.filters"); },
+  get groups(): string { return t("panel.groups"); },
+  get display(): string { return t("panel.display"); },
+  get forces(): string { return t("panel.forces"); },
+  get searchFiles(): string { return t("panel.searchFiles"); },
+  get clearSearch(): string { return t("panel.clearSearch"); },
+  get depth(): string { return t("panel.depth"); },
+  get depthDescription(): string { return t("panel.depthDescription"); },
+  get incoming(): string { return t("panel.incoming"); },
+  get incomingDescription(): string { return t("panel.incomingDescription"); },
+  get outgoing(): string { return t("panel.outgoing"); },
+  get outgoingDescription(): string { return t("panel.outgoingDescription"); },
+  get neighbor(): string { return t("panel.neighbor"); },
+  get neighborDescription(): string { return t("panel.neighborDescription"); },
+  get tags(): string { return t("panel.tags"); },
+  get tagsDescription(): string { return t("panel.tagsDescription"); },
+  get attachments(): string { return t("panel.attachments"); },
+  get attachmentsDescription(): string { return t("panel.attachmentsDescription"); },
+  get existingOnly(): string { return t("panel.existingOnly"); },
+  get existingOnlyDescription(): string { return t("panel.existingOnlyDescription"); },
+  get orphans(): string { return t("panel.orphans"); },
+  get orphansDescription(): string { return t("panel.orphansDescription"); },
+  get arrows(): string { return t("panel.arrows"); },
+  get arrowsDescription(): string { return t("panel.arrowsDescription"); },
+  get textFade(): string { return t("panel.textFade"); },
+  get nodeSize(): string { return t("panel.nodeSize"); },
+  get linkThickness(): string { return t("panel.linkThickness"); },
+  get centerForce(): string { return t("panel.centerForce"); },
+  get repelForce(): string { return t("panel.repelForce"); },
+  get linkForce(): string { return t("panel.linkForce"); },
+  get linkDistance(): string { return t("panel.linkDistance"); },
+  get enterQuery(): string { return t("panel.enterQuery"); },
+  get deleteGroup(): string { return t("panel.deleteGroup"); },
+  get newGroup(): string { return t("panel.newGroup"); },
+  get swatchTooltip(): string { return t("panel.swatchTooltip"); },
+  get animate(): string { return t("panel.animate"); },
+  get stop(): string { return t("panel.stop"); },
+  get close(): string { return t("panel.close"); },
+  get openSettings(): string { return t("panel.openSettings"); },
+  get startTimelapse(): string { return t("panel.startTimelapse"); },
+  get stopTimelapse(): string { return t("panel.stopTimelapse"); },
+  get restoreDefaults(): string { return t("panel.restoreDefaults"); },
 };
 
 /** What the reset button puts back: everything except zoom, panel state and collapse state. */
@@ -239,7 +248,7 @@ export class GraphControls {
     value: boolean,
   ): void {
     const options = this.host.options;
-    new Setting(parent)
+    const setting = new Setting(parent)
       .setName(name)
       .setTooltip(description)
       .setClass("mod-toggle")
@@ -253,6 +262,7 @@ export class GraphControls {
           });
         return component;
       });
+    setting.settingEl.dataset.fgvOption = key;
   }
 
   /** Native debounces typing at 250 ms and commits immediately on Enter. */
@@ -307,7 +317,7 @@ export class GraphControls {
       const swatch = swatchEl(el, color);
       setTooltip(swatch, TEXT.swatchTooltip);
       const row: GroupRow = { el, query, color };
-      swatch.addEventListener("mousedown", (evt) =>
+      swatch.addEventListener("pointerdown", (evt) =>
         this.dragRow(evt, row, { rows, rowsEl, grabEl: section.childrenEl, read, render, commit }),
       );
       const remove = el.createDiv({ cls: "clickable-icon" });
@@ -345,7 +355,7 @@ export class GraphControls {
   }
 
   /** 5 px threshold, a `drag-ghost` clone, then the rows are re-rendered in the new order. */
-  private dragRow(evt: MouseEvent, row: GroupRow, board: GroupBoard): void {
+  private dragRow(evt: PointerEvent, row: GroupRow, board: GroupBoard): void {
     if (evt.button !== 0 || board.rows.indexOf(row) < 0) return;
     this.activeDragCleanup?.();
     const el = row.el;
@@ -365,8 +375,9 @@ export class GraphControls {
     };
 
     const cleanup = (): void => {
-      window.removeEventListener("mousemove", move);
-      window.removeEventListener("mouseup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", cancel);
       if (ghost) {
         ghost.remove();
         document.body.removeClass("is-grabbing");
@@ -375,7 +386,7 @@ export class GraphControls {
       this.activeDragCleanup = null;
     };
 
-    const move = (e: MouseEvent): void => {
+    const move = (e: PointerEvent): void => {
       e.preventDefault();
       if (!ghost) {
         const dx = e.clientX - startX;
@@ -399,7 +410,7 @@ export class GraphControls {
       }
     };
 
-    const up = (e: MouseEvent): void => {
+    const up = (e: PointerEvent): void => {
       const hadGhost = ghost !== null;
       cleanup();
       if (!hadGhost) return;
@@ -410,9 +421,12 @@ export class GraphControls {
       board.commit();
     };
 
+    const cancel = (): void => cleanup();
+
     this.activeDragCleanup = cleanup;
-    window.addEventListener("mousemove", move);
-    window.addEventListener("mouseup", up);
+    window.addEventListener("pointermove", move, { passive: false });
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", cancel);
   }
 
   // ---------------------------------------------------------------- timelapse
@@ -461,7 +475,7 @@ export class GraphControls {
     step: number | "any",
   ): void {
     const options = this.host.options;
-    new Setting(parent)
+    const setting = new Setting(parent)
       .setName(name)
       .setClass("mod-slider")
       .addSlider((slider: SliderComponent) => {
@@ -476,6 +490,7 @@ export class GraphControls {
           });
         return slider;
       });
+    setting.settingEl.dataset.fgvOption = key;
   }
 
   // ------------------------------------------------------------------- forces
@@ -619,33 +634,16 @@ class ControlSection {
   }
 }
 
-interface ColorComponentInternals {
-  colorPickerEl?: HTMLElement;
-  getValueInt?(): number;
-  setValueInt?(value: number): unknown;
-}
-
-function internals(color: ColorComponent): ColorComponentInternals {
-  return color as unknown as ColorComponentInternals;
-}
-
-/** The swatch is the native `input[type=color]`, with `colorPickerEl` preferred. */
-function swatchEl(row: HTMLElement, color: ColorComponent): HTMLElement {
-  return internals(color).colorPickerEl ?? row.querySelector<HTMLElement>("input[type='color']") ?? row;
+/** Find the public component's rendered color input without relying on private fields. */
+function swatchEl(row: HTMLElement, _color: ColorComponent): HTMLElement {
+  return row.querySelector<HTMLElement>("input[type='color']") ?? row;
 }
 
 function colorInt(color: ColorComponent): number {
-  const read = internals(color).getValueInt;
-  if (read) return read.call(color);
   return parseInt(color.getValue().replace("#", ""), 16) || 0;
 }
 
 function setColorInt(color: ColorComponent, rgb: number): void {
-  const write = internals(color).setValueInt;
-  if (write) {
-    write.call(color, rgb);
-    return;
-  }
   color.setValue(`#${(rgb & 0xffffff).toString(16).padStart(6, "0")}`);
 }
 

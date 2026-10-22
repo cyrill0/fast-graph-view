@@ -10,7 +10,7 @@
 const HELPERS = `
 (() => {
   const app = window.app;
-  const leaf = () => app.workspace.getLeavesOfType('graph')[0] ?? null;
+  const leaf = () => app.workspace.getLeavesOfType('fast-graph-view')[0] ?? null;
   const eng = () => leaf()?.view?.presenter?.engine ?? null;
   const box = () => leaf().view.contentEl.querySelector('.fast-graph-gl').getBoundingClientRect();
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -123,10 +123,10 @@ const RELOAD = `(async () => {
   }
   await app.plugins.enablePlugin('fast-graph-view');
   await sleep(700);
-  app.workspace.detachLeavesOfType('graph');
+  app.workspace.detachLeavesOfType('fast-graph-view');
   app.workspace.detachLeavesOfType('markdown');
   await sleep(400);
-  app.commands.executeCommandById('graph:open');
+  app.commands.executeCommandById('fast-graph-view:open');
   for (let i = 0; i < 200; i++) {
     await sleep(250);
     if (window.__fg?.eng?.()?.model) break;
@@ -584,7 +584,7 @@ export default async function ({ evalJs, mouse, wheel, shot, sleep, wake }) {
           return JSON.stringify({
             navLeafView: l?.view?.getViewType?.() ?? null,
             active: app.workspace.getActiveFile()?.path ?? null,
-            graphLeaves: app.workspace.getLeavesOfType('graph').length,
+            graphLeaves: app.workspace.getLeavesOfType('fast-graph-view').length,
             markdownLeaves: app.workspace.getLeavesOfType('markdown').length,
             backHistory: l?.history?.backHistory?.length ?? null,
             forwardHistory: l?.history?.forwardHistory?.length ?? null,
@@ -609,7 +609,7 @@ export default async function ({ evalJs, mouse, wheel, shot, sleep, wake }) {
           const app = window.app, l = window.__navLeaf;
           return JSON.stringify({
             navLeafView: l?.view?.getViewType?.() ?? null,
-            graphLeaves: app.workspace.getLeavesOfType('graph').length,
+            graphLeaves: app.workspace.getLeavesOfType('fast-graph-view').length,
             forwardHistory: l?.history?.forwardHistory?.length ?? null,
           });
         })()`),

@@ -38,6 +38,8 @@ type WorkerIn =
   | { type: "unpin"; revision: number; id: number }
   | { type: "radius"; revision: number; radius: Float32Array }
   | { type: "return"; revision: number; pos: Float32Array }
+  | { type: "cadence"; simulationHz: number; publishHz: number }
+  | { type: "pause"; paused: boolean }
   | { type: "run"; revision: number }
   | { type: "stop" };
 
@@ -48,7 +50,10 @@ let revision = -1;
 /** buffer handed back by the main thread and awaiting reuse */
 let spare: Float32Array | null = null;
 let timer: ReturnType<typeof setInterval> | null = null;
-const TICK_MS = 1000 / 60;
+let simulationHz = 60;
+let publishHz = 60;
+let publishAccumulator = 0;
+let paused = false;
 
 function publish(): void {
   const out = spare ?? new Float32Array(core.count * 2);
@@ -70,11 +75,17 @@ function stop(): void {
 
 function start(): void {
   stop();
+  if (paused) return;
+  publishAccumulator = 0;
   timer = setInterval(() => {
     core.step();
-    publish();
+    publishAccumulator += publishHz;
+    if (publishAccumulator >= simulationHz || core.alpha <= ALPHA_MIN) {
+      publishAccumulator -= simulationHz;
+      publish();
+    }
     if (core.alpha <= ALPHA_MIN) stop();
-  }, TICK_MS);
+  }, 1000 / simulationHz);
 }
 
 self.onmessage = (event: MessageEvent<WorkerIn>) => {
@@ -122,6 +133,18 @@ self.onmessage = (event: MessageEvent<WorkerIn>) => {
     case "return": {
       if (msg.revision !== revision) break;
       if (msg.pos.length >= core.count * 2) spare = msg.pos;
+      break;
+    }
+    case "cadence": {
+      simulationHz = Math.max(5, Math.min(60, msg.simulationHz));
+      publishHz = Math.max(5, Math.min(simulationHz, msg.publishHz));
+      if (timer !== null) start();
+      break;
+    }
+    case "pause": {
+      paused = msg.paused;
+      if (paused) stop();
+      else if (core.alpha > ALPHA_MIN) start();
       break;
     }
     case "run": {

@@ -28,8 +28,8 @@ const INSTALL = `(() => {
 
 const PRELUDE = `(() => {
   const app = window.app;
-  window.__engine = () => app.workspace.getLeavesOfType('graph')[0]?.view?.presenter?.engine ?? null;
-  window.__canvas = () => app.workspace.getLeavesOfType('graph')[0]?.view?.contentEl.querySelector('.fast-graph-gl');
+  window.__engine = () => app.workspace.getLeavesOfType('fast-graph-view')[0]?.view?.presenter?.engine ?? null;
+  window.__canvas = () => app.workspace.getLeavesOfType('fast-graph-view')[0]?.view?.contentEl.querySelector('.fast-graph-gl');
   return 1;
 })()`;
 

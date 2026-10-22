@@ -270,11 +270,13 @@ export class SimulationCore {
   }
 
   /**
-   * Uniform-grid collision relaxation. The cell size is the base radius so a
-   * normal node only inspects its 3x3 neighbourhood; oversized nodes (folder
-   * clusters) widen the window by their own radius plus the largest radius
-   * present, which keeps every possible contact pair visible from at least
-   * one side.
+   * Uniform-grid collision relaxation. Cells stay tied to the normal node
+   * diameter: sizing the whole grid from the largest folder cluster used to
+   * put thousands of ordinary nodes in one bucket and turn a tick quadratic.
+   *
+   * A pair is owned by its larger node (or the lower index for equal radii).
+   * That node widens only its own search window, so an oversized cluster still
+   * finds every node it can touch while ordinary nodes retain a 3x3 lookup.
    */
   private collide(baseRadius: number, strength: number): void {
     const n = this.n;
@@ -290,12 +292,7 @@ export class SimulationCore {
     const cellY = this.nodeCellY;
     const mask = size - 1;
 
-    let maxR = baseRadius;
-    for (let i = 0; i < n; i++) {
-      const r = radius[i] || baseRadius;
-      if (r > maxR) maxR = r;
-    }
-    const cell = Math.max(10, maxR * 2);
+    const cell = Math.max(10, baseRadius * 2);
     const invCell = 1 / cell;
     head.fill(-1);
 
@@ -315,14 +312,23 @@ export class SimulationCore {
       const yi = pos[i * 2 + 1] + vy[i];
       const cx = cellX[i];
       const cy = cellY[i];
-      for (let oy = -1; oy <= 1; oy++) {
+      // This node owns only pairs whose other radius is <= ri, so 2 * ri is
+      // the largest possible contact distance (including cluster/cluster).
+      const reach = Math.max(1, Math.ceil(ri * 2 * invCell));
+      for (let oy = -reach; oy <= reach; oy++) {
         const gy = cy + oy;
-        for (let ox = -1; ox <= 1; ox++) {
+        for (let ox = -reach; ox <= reach; ox++) {
           const gx = cx + ox;
           let j = head[hashCell(gx, gy) & mask];
           while (j !== -1) {
             if (j !== i && cellX[j] === gx && cellY[j] === gy) {
               const rj = radius[j] || baseRadius;
+              // The larger disc owns the pair. Equal discs use the lower id,
+              // ensuring one impulse rather than the previous duplicate pass.
+              if (ri < rj || (ri === rj && i > j)) {
+                j = next[j];
+                continue;
+              }
               const rr = ri + rj;
               let dx = xi - (pos[j * 2] + vx[j]);
               let dy = yi - (pos[j * 2 + 1] + vy[j]);
@@ -334,7 +340,10 @@ export class SimulationCore {
                 d = Math.sqrt(dx * dx + dy * dy);
               }
               if (d < rr && d > 0) {
-                const l = ((rr - d) / d) * strength;
+                // Pairs were historically visited from both ends. Doubling
+                // the one canonical impulse retains approximately the same
+                // relaxation strength without doing duplicate work.
+                const l = ((rr - d) / d) * strength * 2;
                 const px = dx * l;
                 const py = dy * l;
                 vx[i] += px;

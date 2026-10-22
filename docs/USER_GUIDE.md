@@ -1,6 +1,6 @@
 # Fast Graph View User Guide
 
-Fast Graph View replaces Obsidian's built-in graph views with a WebGL-powered graph that
+Fast Graph View adds a standalone WebGL-powered graph alongside Obsidian's built-in views and
 stays usable in large vaults. Its main difference is folder aggregation: instead of drawing
 every file in a large folder, it can draw one expandable folder cluster and summarize the
 files represented by that cluster.
@@ -35,37 +35,35 @@ pnpm build
 The build produces the three plugin files at the repository root. Copy them to the plugin
 folder above, then reload Obsidian or enable the plugin.
 
-## 2. Choose how the plugin integrates with Obsidian
+### Display language
 
-Open **Settings -> Fast Graph View**.
+The plugin's UI follows Obsidian's own language setting; there is no separate language picker
+in its settings tab. English, German, French, Spanish, Italian, Brazilian Portuguese,
+Russian, Polish, Japanese, Simplified Chinese and Korean are built in. Every other language,
+including Traditional Chinese, falls back to English rather than to a lookalike script.
 
-### Take over the built-in graph views
+Change the language under **Settings -> General**, then reload Obsidian. Already-open graph
+panes keep the labels they were built with, because the panel reads them once when it is
+drawn.
 
-By default, **Replace the built-in graph view** is enabled. With takeover enabled:
+The names quoted in this guide are the English ones.
 
-- The normal **Graph view** command opens Fast Graph View.
-- The normal ribbon button opens Fast Graph View.
-- Existing graph keybindings continue to work.
-- File-menu actions such as **Open in graph view** use the replacement view.
-- The optional **Replace the built-in local graph** setting applies the same behavior to
-  local graphs.
+## 2. How the plugin integrates with Obsidian
 
-Existing graph panes are migrated when this setting changes. You do not need to close and
-reopen every pane manually.
+The plugin always runs alongside the built-in graph. It uses its own `fast-graph-view` and
+`fast-localgraph` view types and never replaces Obsidian's graph creators or configuration.
 
-### Run alongside the built-in views
+- The Fast Graph View ribbon icon opens its global graph.
+- **Open clustered graph** opens the global graph from the command palette.
+- **Open clustered local graph** opens a local graph for the active note.
+- The Markdown file menu includes the same local-graph action for the selected note.
 
-Disable takeover when you want to compare the two implementations. The plugin then exposes
-separate view types named `fast-graph-view` and `fast-localgraph`, while Obsidian restores
-its native graph view creators.
-
-Use takeover mode for normal daily use. Use standalone mode when comparing behavior or
-diagnosing a problem.
+Open **Settings -> Fast Graph View** to configure folder aggregation and rendering budgets.
 
 ## 3. Open your first graph
 
 1. Open the command palette with `Ctrl/Cmd+P`.
-2. Run **Open graph view** for the global graph, or open a note and run **Open local graph**.
+2. Run **Open clustered graph** for the global graph, or open a note and run **Open clustered local graph**.
 3. Wait for the layout to settle.
 4. Drag empty space to pan and use the mouse wheel to zoom.
 
@@ -109,15 +107,18 @@ The clustering settings control:
 
 - **Fold up large folders**: enable or disable folder aggregation.
 - **Files per folder before folding**: the direct or recursive threshold.
-- **Counting mode**: `direct` counts files immediately inside a folder; `recursive` counts
-  the complete subtree.
+- **Count notes**: **Directly inside the folder** counts only the notes in a folder;
+  **Including subfolders** counts the complete subtree.
 - **Node budget**: the maximum number of visible graph nodes, defaulting to 2,500.
-- **Metadata-node budget**: the separate limit for tags and unresolved links.
-- **Cluster hover details**: show or hide the cluster information card.
-- **Node/frame status line**: show or hide performance information.
+- **Tag and unresolved link limit**: the separate limit for tags and unresolved links.
+- **Shorten long names**: how many characters a name may use on the canvas, 24 by default. An
+  unresolved link also loses the folder path its linktext carries. The node under the cursor
+  always shows its complete name, and **0** stops shortening anything.
+- **Show folder details on hover**: show or hide the cluster information card.
+- **Show node and frame counts**: show or hide performance information.
 
-Use `recursive` counting for deeply nested project folders. Use `direct` counting when
-only the files immediately inside each folder should determine whether it folds.
+Use **Including subfolders** for deeply nested project folders. Use **Directly inside the
+folder** when only the files immediately inside each folder should determine whether it folds.
 
 The node budget can fold additional heavy folders even when they are below the normal
 threshold. This keeps the rendered graph within a practical size for very large vaults.
@@ -127,18 +128,19 @@ threshold. This keeps the rendered graph within a practical size for very large 
 Open the graph's control panel using the graph view's normal controls. The panel contains
 the same broad groups as Obsidian's native graph view:
 
-- **Search**: filter visible nodes with a graph query.
+- **Filters**: the query field, plus **Tags**, **Attachments**, **Existing files only** and
+  **Orphans**. On a local graph this section also holds **Depth** and the **Incoming links**,
+  **Outgoing links** and **Neighbor links** switches.
 - **Groups**: assign colors using ordered query rules.
-- **Display**: configure tags, attachments, unresolved links, orphans, arrows, text fade,
-  node size, and line size.
-- **Forces**: tune center force, repulsion, link force, and link distance.
-- **Local graph**: configure depth and link directions when viewing a local graph.
+- **Display**: **Arrows**, **Text fade threshold**, **Node size** and **Link thickness**, plus
+  the timelapse control.
+- **Forces**: **Center force**, **Repel force**, **Link force** and **Link distance**.
 
 Color groups are evaluated from top to bottom. The first matching group determines a node's
 color. Drag groups to reorder them when a more specific rule should take precedence.
 
-Graph options use Obsidian's native option names and ranges. They are saved with the graph
-view and are compatible with Obsidian's normal graph configuration.
+Graph options use familiar names and ranges. Global options are saved in this plugin's data;
+local options are saved with their graph pane.
 
 ## 6. Search the graph
 
@@ -196,7 +198,7 @@ For a file node:
 
 For other node types:
 
-- Click a tag node to open a global tag search.
+- Click a tag node to filter the current graph to that tag.
 - Unresolved-link nodes do not open a file menu.
 - Right-click a folder cluster to collapse it.
 
@@ -211,17 +213,16 @@ their metadata card.
 ## 9. Work with local graphs
 
 1. Open a note.
-2. Open its local graph from the command palette, file menu, or normal Obsidian graph
-   controls.
-3. Set **Local graph depth** from 1 to 5.
-4. Enable or disable backlinks, forelinks, and interlinks as needed.
+2. Open its local graph from the Fast Graph View command or Markdown file menu.
+3. In the panel's **Filters** section, set **Depth** from 1 to 5.
+4. Enable or disable **Incoming links**, **Outgoing links** and **Neighbor links** as needed.
 
-The local graph can follow the active file. When it is pinned, changing the active note does
-not change its root. Folder clustering can also be enabled for local graphs with the
-**Cluster local graphs** setting.
+The local graph keeps the root it was opened with. Close it and open a new local graph to use
+a different root. Folder clustering uses the same plugin settings as the global graph.
 
 Use a shallow depth to inspect immediate dependencies. Use a larger depth to explore a
-topic neighborhood, then turn off interlinks or backlinks if the view becomes too dense.
+topic neighborhood, then turn off **Neighbor links** or **Incoming links** if the view
+becomes too dense.
 
 ## 10. Use timelapse
 
@@ -262,12 +263,34 @@ If the graph is still too dense, reduce the node budget, increase the folder thr
 disable tags and unresolved links. If it is too abstract, lower the threshold and expand
 clusters as needed.
 
+### Mobile behavior
+
+On Android, iPhone, and iPad:
+
+- Swipe with one finger to pan, tap a node to open or expand it, pinch with two fingers to
+  zoom, and long-press for the node's context action.
+- The first open can briefly show a centered loading indicator while the shared metadata
+  snapshot is prepared. Opening another graph pane reuses that snapshot.
+- The plugin selects a conservative starting profile from the device and then adapts to real
+  frame time. Labels and arrows may disappear, motion may update less often, and the canvas
+  may become slightly softer when the device is under pressure. These are temporary session
+  changes and do not alter the graph settings synchronized with desktop.
+- Direct pan and pinch temporarily use lower detail. Quality returns slowly after interaction
+  so that the view does not alternate rapidly between levels.
+- Obsidian backgrounding pauses physics. Returning to the app, rotating the device, or
+  recovering a WebGL context restores and resizes the graph automatically.
+
+For the best result on a very low-memory phone, keep tags and unresolved links hidden and
+leave large-folder aggregation enabled. If iOS or Android kills Obsidian while the graph is
+open, reopen the app with fewer graph panes; that indicates an operating-system memory limit,
+not a saved quality setting.
+
 ## 13. Troubleshooting
 
 ### The normal Graph command still opens the native view
 
-Check **Settings -> Fast Graph View -> Replace the built-in graph view**. After changing it,
-close and reopen the graph if Obsidian has not migrated the pane automatically.
+This is expected. Fast Graph View is standalone; use its ribbon icon or **Open clustered
+graph** command instead.
 
 ### The graph is empty
 
@@ -277,14 +300,15 @@ node.
 
 ### A local graph has the wrong root
 
-Check whether the local graph is pinned. An unpinned local graph follows the active file;
-a pinned graph keeps its saved root.
+Close the pane, activate the intended note, and run **Open clustered local graph** again. Each
+local pane keeps the root it was opened with.
 
 ### The graph reports that WebGL is unavailable
 
-The plugin requires WebGL or WebGL2 for rendering. Try a desktop Obsidian window with
-hardware acceleration enabled. The force simulation can fall back to the main thread, but
-the graph renderer itself does not have a Canvas fallback.
+The plugin requires WebGL or WebGL2 for rendering. On mobile, close other graph panes and
+restart Obsidian; on desktop, verify that hardware acceleration is enabled. Recoverable mobile
+WebGL context loss is handled automatically. The force simulation can fall back to the main
+thread, but the graph renderer itself does not have a Canvas fallback.
 
 ### The graph contains too many cluster nodes
 
@@ -300,8 +324,9 @@ or disable them when the graph should focus on file relationships.
 
 - It does not search note body text or properties.
 - It does not provide inline search autocomplete.
-- It does not show a loading spinner for model rebuilds.
-- It does not localize its UI strings; the shipped UI is English.
+- It does not show a loading spinner for routine model rebuilds; the initial shared mobile
+  vault snapshot has one because the pane is intentionally painted before indexing starts.
+- It does not offer its own language picker; the UI language is always Obsidian's.
 - It aggregates folders, but does not hierarchically fold tags or unresolved links.
 - It requires WebGL for display, even though physics has a worker and main-thread fallback.
 

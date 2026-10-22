@@ -3,8 +3,8 @@
   "name": "Fast Graph View",
   "version": "1.0.0",
   "minAppVersion": "1.7.0",
-  "description": "WebGL graph view with a worker-based force layout that stays responsive in huge vaults by collapsing folders with more than a configurable number of files into a single metadata node. Can take over the built-in graph view.",
+  "description": "Standalone WebGL graph view with a worker-based force layout that stays responsive in huge vaults by collapsing large folders into metadata nodes.",
   "author": "cyrill",
-  "authorUrl": "",
+  "authorUrl": "https://github.com/cyrill0",
   "isDesktopOnly": false
 }

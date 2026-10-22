@@ -19,6 +19,7 @@ import { Platform } from "obsidian";
 import { NodeKind, type ClusterMeta, type GraphModel } from "../graph/types";
 import type { RawGraph } from "../graph/raw";
 import { modelRadii } from "../graph/sizing";
+import { t } from "../i18n";
 import type { ClusterOptions, GraphOptions } from "../settings";
 import { COLLIDE_RADIUS, ALPHA_MIN, ALPHA_REHEAT, ALPHA_START, repelToCharge, sliderToEngine } from "../layout/forces";
 import type { ForceConfig } from "../layout/forces";
@@ -27,6 +28,13 @@ import { Camera } from "../render/camera";
 import { GraphRenderer, type RenderScene, type RenderStyle } from "../render/renderer";
 import { LabelLayer, textAlphaFor } from "../render/labels";
 import { ThemeReader, type GraphColors, type Rgba } from "../render/theme";
+import { graphPerformanceProfile } from "./performance";
+import {
+  MobileQualityController,
+  initialMobileTier,
+  readMobileCapabilities,
+  type MobileQualityProfile,
+} from "../mobile/performance";
 
 /** How many members a folder click reveals at a time. */
 export const REVEAL_STEP = 25;
@@ -37,12 +45,6 @@ const FADE_EASE = 0.1;
 /** Easing alone never reaches its target, so the idle loop would never stop without this. */
 const FADE_SNAP = 1 / 255;
 const IDLE_FRAMES_TO_STOP = 60;
-/** Above this many nodes the label pass stops counting. */
-const MAX_LABELS = 700;
-/** Keep the mobile graph responsive on phone GPUs and memory budgets. */
-const MOBILE_MAX_LABELS = 160;
-const MOBILE_NODE_BUDGET = 650;
-const MOBILE_METADATA_BUDGET = 250;
 const MOBILE_CLUSTER_THRESHOLD = 15;
 /** Fields that read arrow and +/- keystrokes themselves, so the camera must leave them alone. */
 const TEXTUAL_INPUTS = new Set([
@@ -95,6 +97,7 @@ export class GraphEngine {
   readonly camera = new Camera();
   model: GraphModel | null = null;
   private readonly mobile = Platform.isMobile;
+  private readonly quality: MobileQualityController | null;
 
   private renderer: GraphRenderer | null = null;
   private labelLayer: LabelLayer | null = null;
@@ -136,6 +139,10 @@ export class GraphEngine {
   private lastBuildMs = 0;
   private lastRenderMs = 0;
   private destroyed = false;
+  private interacting = false;
+  private contextLost = false;
+  private lastFrameStarted = 0;
+  private lastHoverTestAt = 0;
 
   /** timelapse state */
   private progressionLimit: number | null = null;
@@ -153,10 +160,14 @@ export class GraphEngine {
     this.options = options;
     this.cluster = cluster;
     this.theme = new ThemeReader(host.stageEl);
+    this.quality = this.mobile
+      ? new MobileQualityController(initialMobileTier(readMobileCapabilities()), performance.now())
+      : null;
     this.driver = new SimulationDriver({
       onFrame: (positions, info) => this.onSimFrame(positions, info),
-      onFallback: (reason) => this.host.onStatus(`Physics on the main thread: ${reason}`),
+      onFallback: (reason) => this.host.onStatus(t("status.physicsMainThread", { reason })),
     });
+    this.applySimulationCadence();
   }
 
   get usingWorker(): boolean {
@@ -171,23 +182,26 @@ export class GraphEngine {
     const gl = document.createElement("canvas");
     gl.className = "graph-canvas fast-graph-gl";
     stage.appendChild(gl);
+    gl.addEventListener("webglcontextlost", this.onContextLost);
+    gl.addEventListener("webglcontextrestored", this.onContextRestored);
     try {
       this.renderer = new GraphRenderer(gl, this.mobile);
     } catch (error) {
       gl.remove();
-      this.host.onStatus(`WebGL unavailable: ${error instanceof Error ? error.message : error}`);
+      this.host.onStatus(t("status.webglUnavailable", { error: error instanceof Error ? error.message : String(error) }));
       this.renderer = null;
       return;
     }
     this.labelLayer = new LabelLayer(stage);
     this.resize();
     this.bindInput(gl);
+    this.driver.setPaused(document.hidden);
   }
 
   resize(): void {
     const rect = this.host.stageEl.getBoundingClientRect();
     const deviceDpr = window.devicePixelRatio || 1;
-    const dpr = this.mobile ? Math.min(deviceDpr, 1.5) : deviceDpr;
+    const dpr = this.mobile ? Math.min(deviceDpr, this.quality!.current.dprCap) : deviceDpr;
     const width = Math.max(1, Math.floor(rect.width));
     const height = Math.max(1, Math.floor(rect.height));
     this.camera.resize(width, height, dpr);
@@ -197,6 +211,78 @@ export class GraphEngine {
     }
     this.wake();
   }
+
+  private applySimulationCadence(): void {
+    const profile = this.quality?.effective(this.interacting);
+    if (profile) {
+      this.driver.setCadence(profile.simulationHz, profile.publishHz);
+      return;
+    }
+    const model = this.model;
+    const desktop = graphPerformanceProfile(model?.nodeCount ?? 0, model?.edgeCount ?? 0);
+    this.driver.setCadence(desktop.simulationHz, desktop.publishHz);
+  }
+
+  private applyQualityChange(): void {
+    this.applySimulationCadence();
+    this.resize();
+    // Runtime topology reduction is intentionally the final fallback. Tier
+    // hysteresis keeps this from oscillating while the user manipulates the view.
+    this.scheduleRebuild(ALPHA_REHEAT);
+  }
+
+  private setInteracting(interacting: boolean): void {
+    if (this.interacting === interacting) return;
+    this.interacting = interacting;
+    this.applySimulationCadence();
+    this.needsPaint = true;
+  }
+
+  private onContextLost = (evt: Event): void => {
+    evt.preventDefault();
+    this.contextLost = true;
+    this.renderer = null;
+    this.driver.setPaused(true);
+    if (this.raf) cancelAnimationFrame(this.raf);
+    this.raf = 0;
+    this.running = false;
+  };
+
+  private onContextRestored = (): void => {
+    if (this.destroyed) return;
+    const canvas = this.host.stageEl.querySelector<HTMLCanvasElement>("canvas.fast-graph-gl");
+    if (!canvas) return;
+    try {
+      this.renderer = new GraphRenderer(canvas, this.mobile);
+      this.contextLost = false;
+      this.resize();
+      this.driver.setPaused(document.hidden);
+      this.needsPaint = true;
+      this.wake();
+    } catch (error) {
+      this.host.onStatus(t("status.webglUnavailable", {
+        error: error instanceof Error ? error.message : String(error),
+      }));
+    }
+  };
+
+  private onVisibilityChange = (): void => {
+    const paused = document.hidden || this.contextLost;
+    this.driver.setPaused(paused);
+    if (paused) {
+      if (this.raf) cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      this.running = false;
+      return;
+    }
+    this.applySimulationCadence();
+    this.resize();
+    this.wake();
+  };
+
+  private onViewportResize = (): void => {
+    if (!document.hidden && !this.destroyed) this.resize();
+  };
 
   setOptions(options: GraphOptions): void {
     const before = this.options;
@@ -237,6 +323,11 @@ export class GraphEngine {
       before.maxMetadataNodes !== cluster.maxMetadataNodes
     ) {
       this.scheduleRebuild();
+    }
+    if (before.maxLabelChars !== cluster.maxLabelChars) {
+      // labels only: nothing to rebuild, but the frame has to be redrawn now
+      this.needsPaint = true;
+      this.wake();
     }
   }
 
@@ -286,13 +377,13 @@ export class GraphEngine {
       return;
     }
     const options: BuildOptions = {
-      ...clusterKeys(this.cluster, this.mobile),
+      ...clusterKeys(this.cluster, this.mobile ? this.quality!.current : null),
       showTags: this.options.showTags,
       showAttachments: this.options.showAttachments,
       showUnresolved: !this.options.hideUnresolved,
       showOrphans: this.host.isLocal ? true : this.options.showOrphans,
       maxNonFileNodes: this.mobile
-        ? Math.min(this.cluster.maxMetadataNodes, Math.floor(MOBILE_METADATA_BUDGET / 2))
+        ? Math.min(this.cluster.maxMetadataNodes, this.quality!.current.metadataBudget)
         : this.cluster.maxMetadataNodes,
       revealOverrides: this.revealOverrides,
       forcedCollapsed: this.forcedCollapsed,
@@ -337,6 +428,7 @@ export class GraphEngine {
     this.fadesSettled = true;
     this.colorsDirty = true;
 
+    this.applySimulationCadence();
     this.driver.update(model, this.collide, alpha);
     if (!previous) this.camera.resetPan();
     this.reportStats();
@@ -410,11 +502,15 @@ export class GraphEngine {
     this.idleFrames = 0;
     if (this.running || this.destroyed) return;
     this.running = true;
+    this.lastFrameStarted = 0;
     this.raf = requestAnimationFrame(this.frame);
   }
 
   private frame = (): void => {
     if (this.destroyed) return;
+    const frameStarted = performance.now();
+    const frameInterval = this.lastFrameStarted > 0 ? frameStarted - this.lastFrameStarted : 0;
+    this.lastFrameStarted = frameStarted;
     const moved = this.camera.tick();
     const fading = !this.fadesSettled && this.fadesEasing();
     const painting = this.needsPaint || moved || fading;
@@ -423,6 +519,10 @@ export class GraphEngine {
       this.needsPaint = false;
       this.idleFrames = 0;
       if (this.pointerActive && !this.panning && this.dragNode < 0) this.retestHover();
+      const sampledMs = Math.max(performance.now() - frameStarted, frameInterval);
+      if (this.quality?.sample(sampledMs, performance.now())) {
+        this.applyQualityChange();
+      }
     } else {
       this.idleFrames++;
     }
@@ -479,6 +579,8 @@ export class GraphEngine {
     const zoom = camera.zoom;
     const dpr = this.camera.dpr;
     const highlight = this.dragNode >= 0 ? this.dragNode : this.hoverNode;
+    const quality = this.quality?.effective(this.interacting);
+    const desktop = graphPerformanceProfile(model.nodeCount, model.edgeCount, this.interacting);
     this.syncGroupColors();
 
     if (this.colorsDirty) {
@@ -527,7 +629,7 @@ export class GraphEngine {
             }
           : null,
       arrows:
-        this.options.showArrow && zoom > 0.3
+        this.options.showArrow && (quality?.arrows ?? desktop.arrows) && zoom > 0.3
           ? {
               color: { ...c.arrow, a: c.arrow.a * Math.min(1, Math.max(0, 2 * (zoom - 0.3))) },
               size: 2 * Math.sqrt(this.options.lineSizeMultiplier) * dpr,
@@ -549,7 +651,8 @@ export class GraphEngine {
           color: this.theme.textCss,
           fontStack: this.fontStack(),
           hovered: highlight,
-          maxLabels: this.mobile ? MOBILE_MAX_LABELS : MAX_LABELS,
+          maxLabels: quality?.maxLabels ?? desktop.maxLabels,
+          maxChars: this.cluster.maxLabelChars,
         },
         this.camera,
       );
@@ -578,6 +681,9 @@ export class GraphEngine {
     canvas.addEventListener("contextmenu", this.onContextMenu);
     window.addEventListener("pointerup", this.onPointerOutside);
     window.addEventListener("keydown", this.onKeyDown);
+    window.addEventListener("resize", this.onViewportResize);
+    window.visualViewport?.addEventListener("resize", this.onViewportResize);
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   private unbindInput(): void {
@@ -593,6 +699,9 @@ export class GraphEngine {
     }
     window.removeEventListener("pointerup", this.onPointerOutside);
     window.removeEventListener("keydown", this.onKeyDown);
+    window.removeEventListener("resize", this.onViewportResize);
+    window.visualViewport?.removeEventListener("resize", this.onViewportResize);
+    document.removeEventListener("visibilitychange", this.onVisibilityChange);
   }
 
   private onWheel = (evt: WheelEvent): void => {
@@ -612,6 +721,8 @@ export class GraphEngine {
   private touchStartX = 0;
   private touchStartY = 0;
   private touchMoved = false;
+  private touchLongPressTimer: number | null = null;
+  private touchLongPressed = false;
 
   private onPointerDown = (evt: PointerEvent): void => {
     this.lastEvt = evt;
@@ -661,7 +772,11 @@ export class GraphEngine {
         return;
       }
       if (this.panning) {
-        if (Math.hypot(x - this.touchStartX, y - this.touchStartY) > 8) this.touchMoved = true;
+        if (Math.hypot(x - this.touchStartX, y - this.touchStartY) > 8) {
+          this.touchMoved = true;
+          this.cancelTouchLongPress();
+          if (this.hoverNode >= 0) this.setHover(-1);
+        }
         this.camera.trackPan(x - this.lastPanX, y - this.lastPanY, performance.now());
         this.lastPanX = x;
         this.lastPanY = y;
@@ -689,7 +804,7 @@ export class GraphEngine {
       this.wake();
       return;
     }
-    this.retestHover();
+    this.retestHover(true);
   };
 
   private onPointerUp = (evt: PointerEvent): void => {
@@ -716,10 +831,13 @@ export class GraphEngine {
 
   /** Touch drags pan the graph, taps open a node, and two fingers pinch to zoom. */
   private beginTouch(evt: PointerEvent, x: number, y: number, hit: number): void {
+    this.setInteracting(true);
     this.touchPoints.set(evt.pointerId, { x, y });
     this.pointerX = x;
     this.pointerY = y;
-    this.pointerActive = true;
+    // Touch does not continuously hover. Avoid a full hit-test/fade/card pass
+    // on every move; a cluster may still show its card once on pointer-down.
+    this.pointerActive = false;
     try {
       (evt.target as HTMLElement).setPointerCapture?.(evt.pointerId);
     } catch {
@@ -727,6 +845,8 @@ export class GraphEngine {
     }
     this.camera.stopGlide();
     if (this.touchPoints.size >= 2) {
+      this.cancelTouchLongPress();
+      if (this.hoverNode >= 0) this.setHover(-1);
       this.touchTapNode = -1;
       this.touchMoved = true;
       this.panning = true;
@@ -740,16 +860,29 @@ export class GraphEngine {
     this.touchStartX = x;
     this.touchStartY = y;
     this.touchMoved = false;
+    this.touchLongPressed = false;
     this.lastPanX = x;
     this.lastPanY = y;
     this.panning = true;
     this.host.stageEl.classList.add("is-grabbing");
-    this.retestHover();
+    if (hit >= 0 && this.model?.kind[hit] === NodeKind.Cluster) this.setHover(hit);
+    if (hit >= 0) {
+      this.touchLongPressTimer = window.setTimeout(() => {
+        this.touchLongPressTimer = null;
+        if (this.touchMoved || this.touchPoints.size !== 1) return;
+        const node = this.nodeAt(hit);
+        if (!node) return;
+        this.touchLongPressed = true;
+        this.touchTapNode = -1;
+        this.host.onNodeContext(node, evt);
+      }, 550);
+    }
     this.wake();
   }
 
   private endTouch(evt: PointerEvent, allowClick: boolean): void {
     if (!this.touchPoints.has(evt.pointerId)) return;
+    this.cancelTouchLongPress();
     const wasPinching = this.pinch !== null;
     this.touchPoints.delete(evt.pointerId);
 
@@ -770,6 +903,7 @@ export class GraphEngine {
           this.panning = true;
         } else {
           this.panning = false;
+          this.setInteracting(false);
           this.camera.stopGlide();
           this.host.stageEl.classList.remove("is-grabbing");
         }
@@ -779,18 +913,25 @@ export class GraphEngine {
     }
 
     const tapNode = this.touchTapNode;
-    const tapped = allowClick && !this.touchMoved && tapNode >= 0;
+    const tapped = allowClick && !this.touchMoved && !this.touchLongPressed && tapNode >= 0;
     this.touchTapNode = -1;
     this.panning = false;
+    this.setInteracting(false);
+    if (this.hoverNode >= 0) this.setHover(-1);
     this.host.stageEl.classList.remove("is-grabbing");
     this.camera.releasePan();
     this.pointerActive = false;
-    this.retestHover();
     if (tapped) {
       const node = this.nodeAt(tapNode);
       if (node) this.host.onNodeClick(node, evt);
     }
     this.wake();
+  }
+
+  private cancelTouchLongPress(): void {
+    if (this.touchLongPressTimer === null) return;
+    window.clearTimeout(this.touchLongPressTimer);
+    this.touchLongPressTimer = null;
   }
 
   private measurePinch(): { distance: number; x: number; y: number } | null {
@@ -833,7 +974,7 @@ export class GraphEngine {
     }
     this.panning = false;
     this.host.stageEl.classList.remove("is-grabbing");
-    if (dragged < 0) this.retestHover();
+    if (dragged < 0) this.retestHover(true);
     this.wake();
   };
 
@@ -927,7 +1068,7 @@ export class GraphEngine {
     for (let i = 0; i < model.nodeCount; i++) {
       const x = pos[i * 2] * zoom + panX;
       const y = pos[i * 2 + 1] * zoom + panY;
-      const r = radii[i] * scale + 2;
+      const r = radii[i] * scale + (this.mobile ? 8 : 2);
       const dx = x - cssX;
       const dy = y - cssY;
       const d2 = dx * dx + dy * dy;
@@ -953,7 +1094,14 @@ export class GraphEngine {
     };
   }
 
-  private retestHover(): void {
+  private retestHover(force = false): void {
+    const model = this.model;
+    if (!force && model) {
+      const interval = graphPerformanceProfile(model.nodeCount, model.edgeCount, this.interacting).hoverIntervalMs;
+      const now = performance.now();
+      if (interval > 0 && now - this.lastHoverTestAt < interval) return;
+      this.lastHoverTestAt = now;
+    }
     const hit = this.pointerActive ? this.hitTest(this.pointerX, this.pointerY) : -1;
     if (hit === this.hoverNode) return;
     this.setHover(hit);
@@ -1061,7 +1209,7 @@ export class GraphEngine {
       this.progressionLimit = next;
       this.rebuild();
     }, 500);
-    this.host.onStatus("Timelapse running");
+    this.host.onStatus(t("status.timelapseRunning"));
     this.host.onTimelapseChange();
     return true;
   }
@@ -1118,11 +1266,15 @@ export class GraphEngine {
     this.destroyed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.rebuildTimer !== null) clearTimeout(this.rebuildTimer);
+    this.cancelTouchLongPress();
     this.stopTimelapse();
     this.unbindInput();
     this.driver.destroy();
+    const canvas = this.host.stageEl.querySelector<HTMLCanvasElement>("canvas.fast-graph-gl");
+    canvas?.removeEventListener("webglcontextlost", this.onContextLost);
+    canvas?.removeEventListener("webglcontextrestored", this.onContextRestored);
     this.renderer?.dispose();
-    this.host.stageEl.querySelector("canvas.fast-graph-gl")?.remove();
+    canvas?.remove();
     this.labelLayer?.canvas.remove();
     this.theme.destroy();
   }
@@ -1164,7 +1316,7 @@ function isMac(): boolean {
 }
 
 /** Clustering settings are builder inputs; the native option keys are not. */
-function clusterKeys(cluster: ClusterOptions, mobile: boolean): Pick<
+function clusterKeys(cluster: ClusterOptions, mobile: MobileQualityProfile | null): Pick<
   BuildOptions,
   | "clusterEnabled"
   | "clusterThreshold"
@@ -1174,10 +1326,10 @@ function clusterKeys(cluster: ClusterOptions, mobile: boolean): Pick<
 > {
   return {
     // Mobile gets a predictable upper bound even when desktop clustering is off.
-    clusterEnabled: mobile || cluster.enabled,
+    clusterEnabled: mobile !== null || cluster.enabled,
     clusterThreshold: mobile ? Math.min(cluster.threshold, MOBILE_CLUSTER_THRESHOLD) : cluster.threshold,
     clusterMode: cluster.mode,
-    maxVisibleNodes: mobile ? Math.min(cluster.maxVisibleNodes, MOBILE_NODE_BUDGET) : cluster.maxVisibleNodes,
+    maxVisibleNodes: mobile ? Math.min(cluster.maxVisibleNodes, mobile.nodeBudget) : cluster.maxVisibleNodes,
     minTagUses: 1,
   };
 }

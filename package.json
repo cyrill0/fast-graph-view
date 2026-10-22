@@ -2,7 +2,7 @@
   "name": "fast-graph-view",
   "version": "1.0.0",
   "private": true,
-  "description": "WebGL, worker-simulated drop-in replacement for the Obsidian graph view that aggregates large folders into metadata nodes.",
+  "description": "Standalone WebGL graph view with worker-based simulation and large-folder aggregation.",
   "license": "MIT",
   "engines": {
     "node": ">=22.0.0"
@@ -13,6 +13,7 @@
     "watch": "node esbuild.config.mjs production --watch",
     "typecheck": "tsc -noEmit -skipLibCheck",
     "test": "node --test tests/run.mjs",
+    "check:release": "node tools/check-release.mjs",
     "deploy": "node tools/deploy.mjs",
     "dev:vault": "node tools/dev-vault.mjs"
   },

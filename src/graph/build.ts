@@ -1,10 +1,11 @@
+import { formatInt, t, tp } from '../i18n';
 import { EdgeKind, NodeKind, type ClusterMeta, type GraphModel } from './types';
 import type { RawGraph } from './raw';
 import { BackIndex, GraphQuery } from './query';
 
 export interface ColorGroup {
   query: string;
-  /** native graph.json shape: 0xRRGGBB plus an always-1 alpha slot */
+  /** graph color shape: 0xRRGGBB plus an alpha slot */
   color: { a: number; rgb: number };
 }
 
@@ -780,9 +781,9 @@ function applyCarry(carry: { model: GraphModel; pos: Float32Array }, next: Graph
 
 function clusterLabel(raw: RawGraph, slot: Slot): string {
   const folder = raw.folders[slot.folderId] ?? '';
-  const name = folder === '' ? 'Vault root' : folder.slice(folder.lastIndexOf('/') + 1);
-  if (slot.overflow) return `${name}: ${slot.meta.fileCount.toLocaleString()} more`;
-  return `${name} (${slot.meta.fileCount.toLocaleString()})`;
+  const name = folder === '' ? t('label.vaultRoot') : folder.slice(folder.lastIndexOf('/') + 1);
+  if (slot.overflow) return tp('label.clusterOverflow', slot.meta.fileCount, { name });
+  return t('label.clusterCount', { name, count: formatInt(slot.meta.fileCount) });
 }
 
 function parentFolder(raw: RawGraph, i: number): number {

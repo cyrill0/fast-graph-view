@@ -11,10 +11,18 @@ import {
 } from '../src/settings';
 import type { App } from 'obsidian';
 import { RawGraph } from '../src/graph/raw';
+import { VaultGraphSource } from '../src/graph/source';
 import { BackIndex, GraphQuery } from '../src/graph/query';
 import { DEFAULT_BUILD_OPTIONS, buildGraph } from '../src/graph/build';
 import { NodeKind } from '../src/graph/types';
 import { SimulationCore } from '../src/layout/forces';
+import { SimulationDriver } from '../src/layout/simulation';
+import {
+  MobileQualityController,
+  initialMobileTier,
+  mobileProfile,
+} from '../src/mobile/performance';
+import { graphPerformanceProfile } from '../src/view/performance';
 
 function createMockApp(): App {
   const files = [
@@ -64,6 +72,27 @@ function createMockApp(): App {
   } as unknown as App;
 }
 
+function createLargeMockApp(count = 5_000): App {
+  const files = Array.from({ length: count }, (_, i) => ({
+    path: `Area-${Math.floor(i / 100)}/Note-${i}.md`,
+    basename: `Note-${i}`,
+    extension: 'md',
+    stat: { ctime: i, mtime: i, size: 256 },
+  }));
+  const resolvedLinks: Record<string, Record<string, number>> = {};
+  for (let i = 1; i < files.length; i++) {
+    resolvedLinks[files[i].path] = { [files[i - 1].path]: 1 };
+  }
+  return {
+    vault: { getFiles: () => files },
+    metadataCache: {
+      resolvedLinks,
+      unresolvedLinks: {},
+      getFileCache: () => null,
+    },
+  } as unknown as App;
+}
+
 describe('Settings & security sanitization', () => {
   it('prevents prototype pollution and unknown keys in applyNativeOptions and mergeData', () => {
     const target = cloneGraphOptions(DEFAULT_GRAPH_OPTIONS);
@@ -79,7 +108,7 @@ describe('Settings & security sanitization', () => {
 
     const merged = mergeData(malicious);
     assert.equal(({} as Record<string, unknown>).polluted, undefined);
-    assert.equal(merged.takeover, true);
+    assert.equal('takeover' in merged, false);
     assert.equal(merged.cluster.threshold, DEFAULT_CLUSTER_OPTIONS.threshold);
   });
 
@@ -88,12 +117,19 @@ describe('Settings & security sanitization', () => {
       threshold: -5,
       maxVisibleNodes: 999999,
       maxMetadataNodes: -10,
+      maxLabelChars: -5,
       mode: 'invalid' as 'direct',
     });
     assert.equal(cluster.threshold, 1);
     assert.equal(cluster.maxVisibleNodes, 100000);
     assert.equal(cluster.maxMetadataNodes, 0);
+    assert.equal(cluster.maxLabelChars, 0);
     assert.equal(cluster.mode, 'direct');
+    assert.equal(sanitizeClusterOptions({ maxLabelChars: 9999 }).maxLabelChars, 80);
+    assert.equal(
+      sanitizeClusterOptions({}).maxLabelChars,
+      DEFAULT_CLUSTER_OPTIONS.maxLabelChars,
+    );
 
     const groups = sanitizeColorGroups([
       null,
@@ -145,6 +181,60 @@ describe('RawGraph indexing & query engine', () => {
   });
 });
 
+describe('Shared vault snapshot scheduling', () => {
+  it('drops a stale deferred build and emits the newer structural generation', async () => {
+    const originalWindow = globalThis.window;
+    const originalRaf = globalThis.requestAnimationFrame;
+    const nativeSetTimeout = globalThis.setTimeout;
+    const handlers: Record<string, () => void> = {};
+    let destroyOwner = () => {};
+
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: {
+        setTimeout: (fn: TimerHandler) => nativeSetTimeout(fn, 0) as unknown as number,
+        clearTimeout: (id: number) => globalThis.clearTimeout(id as unknown as NodeJS.Timeout),
+      },
+    });
+    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    }) as typeof requestAnimationFrame;
+
+    try {
+      const base = createMockApp() as unknown as {
+        vault: { getFiles(): unknown[] };
+        metadataCache: Record<string, unknown>;
+      };
+      const on = (name: string, callback: () => void) => {
+        handlers[name] = callback;
+        return { name };
+      };
+      const app = {
+        vault: { getFiles: base.vault.getFiles, on },
+        metadataCache: { ...base.metadataCache, on },
+      } as unknown as App;
+      const owner = {
+        registerEvent: () => {},
+        register: (cleanup: () => void) => { destroyOwner = cleanup; },
+      };
+      const source = new VaultGraphSource(app, owner as never);
+      const emitted = new Promise<RawGraph>((resolve) => source.subscribe(resolve));
+      const stale = source.currentAsync();
+      handlers.create();
+
+      assert.equal(await stale, null);
+      const fresh = await emitted;
+      assert.equal(fresh.fileCount, 27);
+      assert.equal(source.built, fresh);
+    } finally {
+      destroyOwner();
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
+      globalThis.requestAnimationFrame = originalRaf;
+    }
+  });
+});
+
 describe('Graph builder & folder clustering', () => {
   it('collapses large folders into cluster nodes and supports progressive reveal', () => {
     const raw = RawGraph.build(createMockApp());
@@ -184,6 +274,21 @@ describe('Graph builder & folder clustering', () => {
     assert.equal(revealed.model.clusters[0].overflow, true);
     assert.equal(revealed.model.clusters[0].fileCount, 15);
   });
+
+  it('keeps a synthetic 5k-note mobile graph inside the emergency topology budget', () => {
+    const started = performance.now();
+    const raw = RawGraph.build(createLargeMockApp());
+    const profile = mobileProfile('emergency');
+    const built = buildGraph(raw, {
+      ...DEFAULT_BUILD_OPTIONS,
+      clusterEnabled: true,
+      clusterThreshold: 15,
+      maxVisibleNodes: profile.nodeBudget,
+      maxNonFileNodes: profile.metadataBudget,
+    });
+    assert.ok(built.model.nodeCount <= profile.nodeBudget);
+    assert.ok(performance.now() - started < 10_000, 'Synthetic mobile build should complete in under 10 seconds');
+  });
 });
 
 describe('Physics simulation & spatial hash stability', () => {
@@ -209,5 +314,137 @@ describe('Physics simulation & spatial hash stability', () => {
       assert.ok(Number.isFinite(out[i]), `Expected finite coordinate at index ${i}`);
     }
     assert.equal(sim.ticks, 10);
+  });
+
+  it('keeps an oversized cluster from making the ordinary-node collision pass quadratic', () => {
+    const n = 3_000;
+    const pos = new Float32Array(n * 2);
+    const radius = new Float32Array(n).fill(12);
+    radius[0] = 5_000;
+    for (let i = 0; i < n; i++) {
+      pos[i * 2] = (i % 100) * 180;
+      pos[i * 2 + 1] = Math.floor(i / 100) * 180;
+    }
+
+    const sim = new SimulationCore();
+    sim.reset(pos, new Int32Array(0), new Int32Array(0), radius, -500);
+    const started = performance.now();
+    sim.step();
+    const elapsed = performance.now() - started;
+
+    assert.ok(elapsed < 1_000, `Expected bounded collision tick, got ${elapsed.toFixed(1)} ms`);
+    for (const coordinate of sim.positions()) assert.ok(Number.isFinite(coordinate));
+  });
+
+  it('still resolves collisions between two oversized clusters in distant grid cells', () => {
+    const pos = new Float32Array([0, 0, 1_500, 0]);
+    const radius = new Float32Array([1_000, 900]);
+    const sim = new SimulationCore();
+    sim.reset(pos, new Int32Array(0), new Int32Array(0), radius, -1);
+    sim.setConfig({ centerStrength: 0, linkStrength: 0 });
+    sim.step();
+    const out = sim.positions();
+    assert.ok(out[0] < 0, 'first cluster should move away from the overlap');
+    assert.ok(out[2] > 1_500, 'second cluster should move away from the overlap');
+  });
+
+  it('sends adaptive cadence and lifecycle state to the worker', () => {
+    const originalWorker = globalThis.Worker;
+    const originalWindow = globalThis.window;
+    const messages: unknown[] = [];
+    class FakeWorker {
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: ErrorEvent) => void) | null = null;
+      postMessage(message: unknown): void { messages.push(message); }
+      terminate(): void {}
+    }
+    Object.defineProperty(globalThis, 'Worker', { configurable: true, value: FakeWorker });
+    Object.defineProperty(globalThis, 'window', {
+      configurable: true,
+      value: { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout },
+    });
+    try {
+      const driver = new SimulationDriver({ onFrame: () => {} });
+      driver.setCadence(30, 20);
+      driver.setPaused(true);
+      driver.setPaused(false);
+      driver.destroy();
+      assert.ok(messages.some((message) =>
+        (message as { type?: string; simulationHz?: number; publishHz?: number }).type === 'cadence' &&
+        (message as { simulationHz?: number }).simulationHz === 30 &&
+        (message as { publishHz?: number }).publishHz === 20));
+      assert.ok(messages.some((message) =>
+        (message as { type?: string; paused?: boolean }).type === 'pause' &&
+        (message as { paused?: boolean }).paused === true));
+    } finally {
+      Object.defineProperty(globalThis, 'Worker', { configurable: true, value: originalWorker });
+      Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
+    }
+  });
+});
+
+describe('Large desktop graph performance policy', () => {
+  it('keeps normal graphs at full quality and progressively bounds oversized graphs', () => {
+    const normal = graphPerformanceProfile(2_000, 1_000);
+    assert.equal(normal.simulationHz, 60);
+    assert.equal(normal.publishHz, 60);
+    assert.equal(normal.maxLabels, 700);
+    assert.equal(normal.arrows, true);
+
+    const expanded = graphPerformanceProfile(6_000, 6_000);
+    assert.equal(expanded.simulationHz, 30);
+    assert.equal(expanded.publishHz, 20);
+    assert.equal(expanded.arrows, false);
+    assert.ok(expanded.hoverIntervalMs > 0);
+
+    const huge = graphPerformanceProfile(15_000, 10_000, true);
+    assert.equal(huge.simulationHz, 20);
+    assert.equal(huge.publishHz, 15);
+    assert.equal(huge.maxLabels, 100);
+    assert.equal(huge.arrows, false);
+  });
+});
+
+describe('Mobile adaptive performance policy', () => {
+  it('starts conservatively on low-memory, low-core, and high-fill devices', () => {
+    assert.equal(initialMobileTier({
+      hardwareConcurrency: 8,
+      deviceMemoryGb: 2,
+      screenPixels: 1_000_000,
+      devicePixelRatio: 2,
+    }), 'emergency');
+    assert.equal(initialMobileTier({
+      hardwareConcurrency: 4,
+      deviceMemoryGb: 4,
+      screenPixels: 1_000_000,
+      devicePixelRatio: 2,
+    }), 'low');
+    assert.equal(initialMobileTier({
+      hardwareConcurrency: 8,
+      deviceMemoryGb: 8,
+      screenPixels: 1_000_000,
+      devicePixelRatio: 2,
+    }), 'balanced');
+  });
+
+  it('degrades quickly, recovers slowly, and uses a temporary interaction tier', () => {
+    const quality = new MobileQualityController('balanced');
+    assert.equal(quality.effective(false).tier, 'balanced');
+    assert.equal(quality.effective(true).tier, 'low');
+
+    let now = 0;
+    for (let i = 0; i < 30; i++) {
+      now += 100;
+      quality.sample(30, now);
+    }
+    assert.equal(quality.tier, 'low');
+    assert.ok(mobileProfile(quality.tier).maxLabels < mobileProfile('balanced').maxLabels);
+    assert.ok(mobileProfile(quality.tier).simulationHz < mobileProfile('balanced').simulationHz);
+
+    for (let i = 0; i < 400; i++) {
+      now += 50;
+      quality.sample(8, now);
+    }
+    assert.equal(quality.tier, 'balanced');
   });
 });

@@ -1,10 +1,4 @@
-/** Settings.
- *
- *  The graph options are the core plugin's keys, ranges and defaults verbatim,
- *  so a leaf state or `.obsidian/graph.json` written by the built-in view reads
- *  straight into this plugin and vice versa. Clustering is ours and lives in
- *  `data.json` under `cluster`.
- */
+/** Persisted graph and clustering settings for this plugin's standalone views. */
 
 import type { ColorGroup } from "./graph/build";
 
@@ -73,6 +67,8 @@ export interface ClusterOptions {
   maxVisibleNodes: number;
   /** cap on tag and unresolved nodes */
   maxMetadataNodes: number;
+  /** longest name the label overlay draws, in characters; 0 never cuts a label */
+  maxLabelChars: number;
   /** hover card / click panel with the folder's rolled-up stats */
   showMetadata: boolean;
   /** the bottom-left line with node, edge and frame timings */
@@ -85,6 +81,7 @@ export const DEFAULT_CLUSTER_OPTIONS: ClusterOptions = {
   mode: "direct",
   maxVisibleNodes: 2500,
   maxMetadataNodes: 1200,
+  maxLabelChars: 24,
   showMetadata: true,
   showStats: true,
 };
@@ -92,17 +89,11 @@ export const DEFAULT_CLUSTER_OPTIONS: ClusterOptions = {
 export interface PluginData {
   graph: GraphOptions;
   cluster: ClusterOptions;
-  /** take over the `graph` / `localgraph` view types and the core plugin's surfaces */
-  takeover: boolean;
-  /** open the clustered graph instead of the native one from the ribbon */
-  clusterLocalGraphs: boolean;
 }
 
 export const DEFAULT_DATA: PluginData = {
   graph: { ...DEFAULT_GRAPH_OPTIONS },
   cluster: { ...DEFAULT_CLUSTER_OPTIONS },
-  takeover: true,
-  clusterLocalGraphs: true,
 };
 
 const MAX_QUERY_LENGTH = 4096;
@@ -215,6 +206,9 @@ export function sanitizeClusterOptions(saved: unknown): ClusterOptions {
   if (typeof src.maxMetadataNodes === "number" && Number.isFinite(src.maxMetadataNodes)) {
     out.maxMetadataNodes = Math.max(0, Math.min(50000, Math.round(src.maxMetadataNodes)));
   }
+  if (typeof src.maxLabelChars === "number" && Number.isFinite(src.maxLabelChars)) {
+    out.maxLabelChars = Math.max(0, Math.min(80, Math.round(src.maxLabelChars)));
+  }
   return out;
 }
 
@@ -225,8 +219,6 @@ export function mergeData(saved: unknown): PluginData {
     return {
       graph,
       cluster: { ...DEFAULT_CLUSTER_OPTIONS },
-      takeover: true,
-      clusterLocalGraphs: true,
     };
   }
   const raw = saved as Partial<PluginData>;
@@ -234,7 +226,5 @@ export function mergeData(saved: unknown): PluginData {
   return {
     graph,
     cluster: sanitizeClusterOptions(raw.cluster),
-    takeover: typeof raw.takeover === "boolean" ? raw.takeover : true,
-    clusterLocalGraphs: typeof raw.clusterLocalGraphs === "boolean" ? raw.clusterLocalGraphs : true,
   };
 }
