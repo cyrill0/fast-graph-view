@@ -1,7 +1,7 @@
 {
   "id": "fast-graph-view",
   "name": "Fast Graph View",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "minAppVersion": "1.7.0",
   "description": "Standalone WebGL graph view with a worker-based force layout that stays responsive in huge vaults by collapsing large folders into metadata nodes.",
   "author": "cyrill",

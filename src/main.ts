@@ -42,7 +42,7 @@ export default class FastGraphPlugin extends Plugin {
     setLocale(appLanguage());
     this.settings = mergeData(await this.loadData());
     this.options = cloneGraphOptions(this.settings.graph);
-    this.source = new VaultGraphSource(this.app, this);
+    this.source = new VaultGraphSource(this.app, this, this.settings.allowVaultEnumeration);
     this.deps = this.buildDeps();
 
     this.registerView(GRAPH_VIEW_TYPE, (leaf) => new FastGraphView(leaf, this.deps));
@@ -143,6 +143,13 @@ export default class FastGraphPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
+  async setVaultAccessAllowed(allowed: boolean): Promise<void> {
+    this.settings.allowVaultEnumeration = allowed;
+    // Revoke access and clear open panes before waiting for persistence.
+    this.source.setAccessAllowed(allowed);
+    await this.saveSettings();
+  }
+
   /** Push edited clustering settings into every pane that is already open. */
   applyClusterOptions(): void {
     for (const type of [GRAPH_VIEW_TYPE, LOCAL_GRAPH_VIEW_TYPE]) {
@@ -158,6 +165,7 @@ export default class FastGraphPlugin extends Plugin {
 
 /** The `settings.<key>.name` / `settings.<key>.desc` pairs the tab draws. */
 type SettingKey =
+  | "vaultAccess"
   | "fold"
   | "threshold"
   | "countNotes"
@@ -180,7 +188,7 @@ class FastGraphSettings extends PluginSettingTab {
   // render the compatible display() fallback below.
   getSettingDefinitions(): SettingDefinitionItem[] {
     const keys: SettingKey[] = [
-      "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
+      "vaultAccess", "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
       "maxLabelChars", "showMetadata", "showStats",
     ];
     return keys.map((key) => ({
@@ -203,6 +211,11 @@ class FastGraphSettings extends PluginSettingTab {
     setting.settingEl.dataset.fgvOption = key;
 
     switch (key) {
+      case "vaultAccess":
+        setting.addToggle((toggle) => toggle
+          .setValue(this.plugin.settings.allowVaultEnumeration)
+          .onChange((value) => this.plugin.setVaultAccessAllowed(value)));
+        break;
       case "fold":
         setting.addToggle((toggle) => toggle.setValue(this.cluster.enabled).onChange(async (value) => {
           this.cluster.enabled = value;
@@ -274,7 +287,7 @@ class FastGraphSettings extends PluginSettingTab {
     this.containerEl.empty();
 
     const keys: SettingKey[] = [
-      "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
+      "vaultAccess", "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
       "maxLabelChars", "showMetadata", "showStats",
     ];
     for (const key of keys) this.renderSetting(new Setting(this.containerEl), key);

@@ -22,6 +22,11 @@ see the project [README](../README.md).
 2. Make sure the folder contains `main.js`, `styles.css`, and `manifest.json`.
 3. Open **Settings -> Community plugins**.
 4. Enable **Fast Graph View**.
+5. To use a graph, open **Settings → Fast Graph View** and enable **Allow vault-wide metadata
+   access**. This is off by default, including on upgrade. It allows the plugin to list all
+   vault file paths and inspect cached links, tags, sizes and dates for both global and local
+   graphs. Note bodies are not read and no vault data is sent over the network. You can turn
+   it off at any time to cancel pending builds and clear open graphs.
 
 ### Build from this repository
 
@@ -244,8 +249,9 @@ timelapse.
 
 ## 11. Save a graph screenshot
 
-Use the graph pane menu and choose **Copy screenshot**. The plugin combines the rendered
-graph and its label overlay, creates a PNG, and copies it to the clipboard.
+Use the graph pane menu and choose **Save screenshot**. The plugin combines the rendered
+graph and its label overlay and downloads a PNG. It does not read or write the system
+clipboard or save the image inside your vault.
 
 ## 12. Tune a large vault
 

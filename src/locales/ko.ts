@@ -2,6 +2,8 @@ import type { Messages } from "./en";
 
 /** Korean has a single plural category, so `one` repeats `other`. */
 const ko = {
+  "settings.vaultAccess.name": "보관함 전체 메타데이터 접근 허용",
+  "settings.vaultAccess.desc": "전체 그래프와 로컬 그래프에 필요합니다. 보관함의 모든 파일 경로를 나열하고 캐시된 링크, 태그, 크기 및 날짜를 읽습니다. 노트 본문을 읽거나 데이터를 전송하지 않습니다. 기본적으로 꺼져 있으며, 끄면 열린 그래프가 비워집니다.",
   "settings.fold.name": "큰 폴더 접기",
   "settings.fold.desc": "폴더 안의 모든 노트 대신 하나의 메타데이터 노드를 그립니다.",
   "settings.threshold.name": "접기 전 폴더당 파일 수",
@@ -33,6 +35,7 @@ const ko = {
   "view.graph": "그래프 보기",
   "view.graphOfFile": "{name}의 그래프",
   "view.localGraph": "로컬 그래프",
+  "view.vaultAccessRequired": "메타데이터 접근이 꺼져 있습니다. 그래프를 만들려면 설정 → Fast Graph View에서 '보관함 전체 메타데이터 접근 허용'을 켜세요.",
 
   "panel.filters": "필터",
   "panel.groups": "그룹",
@@ -107,9 +110,7 @@ const ko = {
   "menu.openLinkedView": "연결된 보기 열기",
   "menu.openInNewTab": "새 탭에서 열기",
   "menu.deleteFile": "파일 삭제",
-  "menu.copyScreenshot": "스크린샷 복사",
-  "notice.clipboardUnsupported": "여기서는 이미지를 클립보드로 복사할 수 없습니다.",
-  "notice.screenshotCopied": "스크린샷을 클립보드에 복사했습니다.",
+  "menu.saveScreenshot": "스크린샷 저장",
 
   "label.vaultRoot": "Vault 루트",
   "label.clusterCount": "{name} ({count})",

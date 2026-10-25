@@ -18,7 +18,6 @@
 import {
   ItemView,
   Menu,
-  Notice,
   Platform,
   TFile,
   type App,
@@ -35,6 +34,7 @@ import { applyNativeOptions, cloneGraphOptions, type ClusterOptions, type GraphO
 import { REVEAL_STEP, GraphEngine, type EngineHost, type EngineStats, type HitNode } from "./engine";
 import { GraphControls, type ControlsHost } from "./controls";
 import { formatFixed, formatInt, t, tp } from "../i18n";
+import { downloadScreenshot } from "./screenshot";
 
 export const GRAPH_VIEW_TYPE = "fast-graph-view";
 export const LOCAL_GRAPH_VIEW_TYPE = "fast-localgraph";
@@ -102,12 +102,13 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     stage.addClass("fast-graph-stage");
     this.engine.attach();
     this.buildStatusLine();
-    this.loadingEl = stage.createDiv({ cls: "fast-graph-loading" });
     this.unsubscribe = this.init.deps.source.subscribe((next) => this.onRaw(next));
     this.engine.setClusterOptions(this.init.deps.cluster);
     this.engine.setOptions(cloneGraphOptions(this.options));
-    void this.init.deps.source.currentAsync().then((raw) => {
-      if (this.loaded && raw) this.onRaw(raw);
+    this.onRaw(this.init.deps.source.built);
+    void this.init.deps.source.currentAsync().then(() => {
+      // Consent or the snapshot may have changed while this request was pending.
+      if (this.loaded) this.onRaw(this.init.deps.source.built);
     });
   }
 
@@ -162,9 +163,18 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     return this.engine.screenshot();
   }
 
-  private onRaw(raw: RawGraph): void {
+  private onRaw(raw: RawGraph | null): void {
     this.loadingEl?.remove();
     this.loadingEl = null;
+    if (!raw) {
+      this.cardEl?.remove();
+      this.cardEl = null;
+      this.cardFolder = null;
+      this.hoverPopover = null;
+      this.loadingEl = this.stageEl.createDiv(this.init.deps.source.enabled
+        ? { cls: "fast-graph-loading" }
+        : { cls: "fast-graph-access", text: t("view.vaultAccessRequired") });
+    }
     this.engine.setRaw(raw);
   }
 
@@ -608,33 +618,13 @@ function addScreenshotItem(menu: Menu, presenter: GraphPresenter): void {
   menu.addItem((item) => {
     item
       .setSection("action")
-      .setTitle(t("menu.copyScreenshot"))
+      .setTitle(t("menu.saveScreenshot"))
       .setIcon("lucide-image")
       .onClick(() => {
         const dataUrl = presenter.screenshot();
-        if (dataUrl) void copyPng(dataUrl);
+        if (dataUrl) downloadScreenshot(presenter.stageEl.ownerDocument, dataUrl);
       });
   });
-}
-
-async function copyPng(dataUrl: string): Promise<void> {
-  try {
-    const comma = dataUrl.indexOf(",");
-    if (comma < 0) throw new Error("Invalid PNG data URL");
-    const binary = atob(dataUrl.slice(comma + 1));
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "image/png" });
-    const clipper = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem;
-    if (!clipper) {
-      new Notice(t("notice.clipboardUnsupported"));
-      return;
-    }
-    await navigator.clipboard.write([new clipper({ "image/png": blob })]);
-    new Notice(t("notice.screenshotCopied"));
-  } catch (error) {
-    new Notice(error instanceof Error ? error.toString() : String(error));
-  }
 }
 
 function formatBytes(bytes: number): string {

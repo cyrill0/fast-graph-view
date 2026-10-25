@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const ru = {
+  "settings.vaultAccess.name": "Разрешить доступ к метаданным всего хранилища",
+  "settings.vaultAccess.desc": "Требуется для глобальных и локальных графов. Позволяет перечислять все пути файлов хранилища и читать кэшированные ссылки, теги, размеры и даты. Текст заметок не читается, данные не отправляются. По умолчанию выключено; отключение очищает открытые графы.",
   "settings.fold.name": "Сворачивать большие папки",
   "settings.fold.desc": "Рисовать один узел метаданных для папки вместо каждой заметки в ней.",
   "settings.threshold.name": "Файлов в папке до сворачивания",
@@ -34,6 +36,7 @@ const ru = {
   "view.graph": "Вид графа",
   "view.graphOfFile": "Граф файла {name}",
   "view.localGraph": "Локальный граф",
+  "view.vaultAccessRequired": "Доступ к метаданным выключен. Чтобы построить граф, включите 'Разрешить доступ к метаданным всего хранилища' в Настройки → Fast Graph View.",
 
   "panel.filters": "Фильтры",
   "panel.groups": "Группы",
@@ -140,9 +143,7 @@ const ru = {
   "menu.openLinkedView": "Открыть связанный вид",
   "menu.openInNewTab": "Открыть в новой вкладке",
   "menu.deleteFile": "Удалить файл",
-  "menu.copyScreenshot": "Скопировать снимок экрана",
-  "notice.clipboardUnsupported": "Копирование изображений в буфер обмена здесь не поддерживается.",
-  "notice.screenshotCopied": "Снимок экрана скопирован в буфер обмена.",
+  "menu.saveScreenshot": "Сохранить снимок экрана",
 
   "label.vaultRoot": "Корень хранилища",
   "label.clusterCount": "{name} ({count})",

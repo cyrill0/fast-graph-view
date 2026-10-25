@@ -4,9 +4,9 @@ import { EdgeKind } from './types';
 /**
  * Flat, cache-shaped view of the vault's link graph.
  *
- * Built only from `metadataCache` - note bodies are never read - so a 24k-note
- * vault costs tens of milliseconds rather than seconds. Cached by the plugin and
- * re-derived only when the vault structure or a note's cache actually changes.
+ * Built from the vault's in-memory file list and `metadataCache`; note bodies
+ * are never read. The source must obtain explicit consent before building this
+ * vault-wide index. Cached and re-derived only when files or metadata change.
  */
 export class RawGraph {
   /** vault paths, index-aligned with every per-file array below */

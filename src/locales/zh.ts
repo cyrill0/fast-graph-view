@@ -2,6 +2,8 @@ import type { Messages } from "./en";
 
 /** Simplified Chinese has a single plural category, so `one` repeats `other`. */
 const zh = {
+  "settings.vaultAccess.name": "允许访问整个仓库的元数据",
+  "settings.vaultAccess.desc": "全局图谱和局部图谱需要此权限。允许列出仓库内所有文件路径并读取缓存的链接、标签、大小和日期。不会读取笔记正文或发送数据。默认关闭；关闭后会清空已打开的图谱。",
   "settings.fold.name": "折叠大文件夹",
   "settings.fold.desc": "为一个文件夹绘制一个元数据节点，而不是其中的每条笔记。",
   "settings.threshold.name": "折叠前每个文件夹的文件数",
@@ -31,6 +33,7 @@ const zh = {
   "view.graph": "图谱视图",
   "view.graphOfFile": "{name} 的图谱",
   "view.localGraph": "本地图谱",
+  "view.vaultAccessRequired": "元数据访问已关闭。要构建图谱，请在设置 → Fast Graph View 中开启“允许访问整个仓库的元数据”。",
 
   "panel.filters": "筛选",
   "panel.groups": "分组",
@@ -105,9 +108,7 @@ const zh = {
   "menu.openLinkedView": "打开关联视图",
   "menu.openInNewTab": "在新标签页中打开",
   "menu.deleteFile": "删除文件",
-  "menu.copyScreenshot": "复制截图",
-  "notice.clipboardUnsupported": "此处不支持将图片复制到剪贴板。",
-  "notice.screenshotCopied": "截图已复制到剪贴板。",
+  "menu.saveScreenshot": "保存截图",
 
   "label.vaultRoot": "仓库根目录",
   "label.clusterCount": "{name}（{count}）",

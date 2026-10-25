@@ -236,7 +236,7 @@ export class GraphRenderer {
   }
 
   /**
-   * Read back the current frame as a PNG data url (pane menu "Copy screenshot").
+   * Read back the current frame as a PNG data url (pane menu "Save screenshot").
    * Labels are drawn on their own canvas, so they are composited in here; this
    * must be called in the same task as the render, with `preserveDrawingBuffer`
    * off the buffer is gone once the frame is presented.

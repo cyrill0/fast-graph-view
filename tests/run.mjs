@@ -1,6 +1,6 @@
 import esbuild from 'esbuild';
 const result = await esbuild.build({
-  entryPoints: ['tests/graph.test.ts', 'tests/i18n.test.ts', 'tests/labels.test.ts'],
+  entryPoints: ['tests/graph.test.ts', 'tests/i18n.test.ts', 'tests/labels.test.ts', 'tests/privacy.test.ts'],
   bundle: true,
   platform: 'node',
   format: 'esm',

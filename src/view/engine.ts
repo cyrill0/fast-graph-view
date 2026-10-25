@@ -331,9 +331,21 @@ export class GraphEngine {
     }
   }
 
-  setRaw(raw: RawGraph): void {
+  setRaw(raw: RawGraph | null): void {
     this.raw = raw;
-    this.scheduleRebuild(ALPHA_START);
+    if (raw) {
+      this.scheduleRebuild(ALPHA_START);
+      return;
+    }
+    this.stopTimelapse();
+    if (this.rebuildTimer !== null) window.clearTimeout(this.rebuildTimer);
+    this.rebuildTimer = null;
+    this.cancelTouchLongPress();
+    this.revealOverrides.clear();
+    this.forcedCollapsed.clear();
+    this.applyModel(emptyGraphModel(), 0, 0);
+    // Do not leave the previous vault graph visible after consent is revoked.
+    if (this.renderer) this.paint();
   }
 
   /** The vault changed; rebuild quietly so the layout barely moves. */
@@ -1234,7 +1246,7 @@ export class GraphEngine {
   /** PNG data url of exactly what is on screen, labels included. */
   screenshot(): string | null {
     const renderer = this.renderer;
-    if (!renderer || !this.model) return null;
+    if (!renderer || !this.model || !this.raw) return null;
     this.paint();
     return renderer.snapshot(this.labelLayer ? this.labelLayer.canvas : null);
   }

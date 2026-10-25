@@ -29,6 +29,17 @@
   z-index: 3;
 }
 
+.fast-graph-access {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(360px, 80%);
+  color: var(--text-muted);
+  text-align: center;
+}
+
 .fast-graph-loading {
   position: absolute;
   z-index: 2;

@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const it = {
+  "settings.vaultAccess.name": "Consenti l'accesso ai metadati dell'intero vault",
+  "settings.vaultAccess.desc": "Necessario per i grafici globali e locali. Consente di elencare tutti i percorsi dei file del vault e leggere collegamenti, etichette, dimensioni e date nella cache. Non vengono letti i contenuti delle note né inviati dati. Disattivato per impostazione predefinita; disattivandolo si svuotano i grafici aperti.",
   "settings.fold.name": "Comprimi le cartelle grandi",
   "settings.fold.desc":
     "Disegna un nodo di metadati per una cartella invece di ogni nota al suo interno.",
@@ -35,6 +37,7 @@ const it = {
   "view.graph": "Vista grafico",
   "view.graphOfFile": "Grafico di {name}",
   "view.localGraph": "Grafico locale",
+  "view.vaultAccessRequired": "L'accesso ai metadati è disattivato. Per creare un grafico, attiva 'Consenti l'accesso ai metadati dell'intero vault' in Impostazioni → Fast Graph View.",
 
   "panel.filters": "Filtri",
   "panel.groups": "Gruppi",
@@ -122,9 +125,7 @@ const it = {
   "menu.openLinkedView": "Apri vista collegata",
   "menu.openInNewTab": "Apri in una nuova scheda",
   "menu.deleteFile": "Elimina file",
-  "menu.copyScreenshot": "Copia schermata",
-  "notice.clipboardUnsupported": "La copia delle immagini negli appunti non è supportata qui.",
-  "notice.screenshotCopied": "Schermata copiata negli appunti.",
+  "menu.saveScreenshot": "Salva schermata",
 
   "label.vaultRoot": "Radice del vault",
   "label.clusterCount": "{name} ({count})",

@@ -218,8 +218,10 @@ void describe('Shared vault snapshot scheduling', () => {
         registerEvent: () => {},
         register: (cleanup: () => void) => { destroyOwner = cleanup; },
       };
-      const source = new VaultGraphSource(app, owner as never);
-      const emitted = new Promise<RawGraph>((resolve) => source.subscribe(resolve));
+      const source = new VaultGraphSource(app, owner as never, true);
+      const emitted = new Promise<RawGraph>((resolve) => source.subscribe((raw) => {
+        if (raw) resolve(raw);
+      }));
       const stale = source.currentAsync();
       handlers.create();
 

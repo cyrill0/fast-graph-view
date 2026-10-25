@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const de = {
+  "settings.vaultAccess.name": "Vaultweiten Metadatenzugriff erlauben",
+  "settings.vaultAccess.desc": "Für globale und lokale Graphen erforderlich. Erlaubt das Auflisten aller Dateipfade im Vault und das Lesen zwischengespeicherter Links, Tags, Größen und Datumsangaben. Keine Notizinhalte werden gelesen oder Daten versendet. Standardmäßig aus; beim Deaktivieren werden offene Graphen geleert.",
   "settings.fold.name": "Große Ordner einklappen",
   "settings.fold.desc": "Einen Metadaten-Knoten für einen Ordner zeichnen statt jeder Notiz darin.",
   "settings.threshold.name": "Dateien pro Ordner vor dem Einklappen",
@@ -34,6 +36,7 @@ const de = {
   "view.graph": "Graph-Ansicht",
   "view.graphOfFile": "Graph von {name}",
   "view.localGraph": "Lokaler Graph",
+  "view.vaultAccessRequired": "Der Metadatenzugriff ist aus. Aktiviere zum Erstellen eines Graphen 'Vaultweiten Metadatenzugriff erlauben' unter Einstellungen → Fast Graph View.",
 
   "panel.filters": "Filter",
   "panel.groups": "Gruppen",
@@ -109,9 +112,7 @@ const de = {
   "menu.openLinkedView": "Verknüpfte Ansicht öffnen",
   "menu.openInNewTab": "In neuem Tab öffnen",
   "menu.deleteFile": "Datei löschen",
-  "menu.copyScreenshot": "Bildschirmfoto kopieren",
-  "notice.clipboardUnsupported": "Bilder in die Zwischenablage zu kopieren wird hier nicht unterstützt.",
-  "notice.screenshotCopied": "Bildschirmfoto in die Zwischenablage kopiert.",
+  "menu.saveScreenshot": "Bildschirmfoto speichern",
 
   "label.vaultRoot": "Vault-Wurzel",
   "label.clusterCount": "{name} ({count})",

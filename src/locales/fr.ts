@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const fr = {
+  "settings.vaultAccess.name": "Autoriser l'accès aux métadonnées de tout le coffre",
+  "settings.vaultAccess.desc": "Requis pour les graphes globaux et locaux. Permet de lister tous les chemins de fichiers du coffre et de lire les liens, étiquettes, tailles et dates en cache. Aucun contenu de note n'est lu et aucune donnée n'est envoyée. Désactivé par défaut ; la désactivation vide les graphes ouverts.",
   "settings.fold.name": "Replier les grands dossiers",
   "settings.fold.desc":
     "Dessine un nœud de métadonnées pour un dossier au lieu de chaque note qu'il contient.",
@@ -35,6 +37,7 @@ const fr = {
   "view.graph": "Vue graphe",
   "view.graphOfFile": "Graphe de {name}",
   "view.localGraph": "Graphe local",
+  "view.vaultAccessRequired": "L'accès aux métadonnées est désactivé. Pour créer un graphe, activez 'Autoriser l'accès aux métadonnées de tout le coffre' dans Paramètres → Fast Graph View.",
 
   "panel.filters": "Filtres",
   "panel.groups": "Groupes",
@@ -118,9 +121,7 @@ const fr = {
   "menu.openLinkedView": "Ouvrir la vue liée",
   "menu.openInNewTab": "Ouvrir dans un nouvel onglet",
   "menu.deleteFile": "Supprimer le fichier",
-  "menu.copyScreenshot": "Copier la capture d'écran",
-  "notice.clipboardUnsupported": "La copie d'images dans le presse-papiers n'est pas prise en charge ici.",
-  "notice.screenshotCopied": "Capture d'écran copiée dans le presse-papiers.",
+  "menu.saveScreenshot": "Enregistrer la capture d'écran",
 
   "label.vaultRoot": "Racine du coffre",
   "label.clusterCount": "{name} ({count})",

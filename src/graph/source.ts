@@ -12,7 +12,8 @@
  *  - content (a note being typed into) only moves link targets, rebuilt after
  *    1.5 s of quiet so a long edit costs one rebuild, not one per save.
  *
- *  Nothing is built at all while no graph leaf is open.
+ *  Nothing is built without explicit vault-metadata consent. Automatic rebuilds
+ *  also stop while no graph leaf is open.
  */
 
 import type { App, Component, EventRef } from "obsidian";
@@ -21,7 +22,7 @@ import { RawGraph } from "./raw";
 const STRUCTURAL_DELAY = 400;
 const CONTENT_DELAY = 1500;
 
-export type RawListener = (raw: RawGraph) => void;
+export type RawListener = (raw: RawGraph | null) => void;
 
 export class VaultGraphSource {
   private raw: RawGraph | null = null;
@@ -33,7 +34,7 @@ export class VaultGraphSource {
   private refs: EventRef[] = [];
   private destroyed = false;
 
-  constructor(private readonly app: App, owner: Component) {
+  constructor(private readonly app: App, owner: Component, private accessAllowed = false) {
     const structural = () => this.mark(true);
     const content = () => this.mark(false);
     this.refs.push(
@@ -47,8 +48,26 @@ export class VaultGraphSource {
     owner.register(() => this.destroy());
   }
 
-  /** Current snapshot, built on first use. */
-  current(): RawGraph {
+  get enabled(): boolean {
+    return this.accessAllowed && !this.destroyed;
+  }
+
+  /** Changes consent immediately, invalidating queued work and cached paths. */
+  setAccessAllowed(allowed: boolean): void {
+    if (this.destroyed || this.accessAllowed === allowed) return;
+    this.accessAllowed = allowed;
+    this.generation++;
+    this.cancelTimer();
+    this.buildPromise = null;
+    this.pendingStructural = false;
+    this.raw = null;
+    this.emit();
+    if (allowed && this.listeners.size > 0) void this.buildDeferred(true);
+  }
+
+  /** Current snapshot, built on first use only after consent. */
+  current(): RawGraph | null {
+    if (!this.enabled) return null;
     if (!this.raw) this.raw = RawGraph.build(this.app);
     return this.raw;
   }
@@ -59,6 +78,7 @@ export class VaultGraphSource {
    * obsolete snapshot from winning after a newer vault event.
    */
   currentAsync(): Promise<RawGraph | null> {
+    if (!this.enabled) return Promise.resolve(null);
     if (this.raw) return Promise.resolve(this.raw);
     return this.buildDeferred(false);
   }
@@ -68,7 +88,8 @@ export class VaultGraphSource {
   }
 
   /** Force a synchronous rebuild, e.g. when a leaf opens after a vault change. */
-  refresh(): RawGraph {
+  refresh(): RawGraph | null {
+    if (!this.enabled) return null;
     this.cancelTimer();
     this.generation++;
     this.raw = RawGraph.build(this.app);
@@ -80,10 +101,18 @@ export class VaultGraphSource {
     this.listeners.add(listener);
     return () => {
       this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        this.generation++;
+        this.cancelTimer();
+        this.buildPromise = null;
+        this.pendingStructural = false;
+        this.raw = null;
+      }
     };
   }
 
   private mark(structural: boolean): void {
+    if (!this.enabled) return;
     this.generation++;
     if (this.destroyed || this.listeners.size === 0) {
       // nobody is looking: drop the snapshot and rebuild when a leaf comes back
@@ -105,31 +134,32 @@ export class VaultGraphSource {
   }
 
   private buildDeferred(emit: boolean): Promise<RawGraph | null> {
+    if (!this.enabled) return Promise.resolve(null);
     if (this.buildPromise) return this.buildPromise;
     const generation = this.generation;
-    this.buildPromise = new Promise<void>((resolve) => {
+    const promise = new Promise<void>((resolve) => {
       // Two queues guarantee at least one browser paint before the synchronous
       // metadata-cache snapshot. This removes the expensive work from view-open.
       window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
     })
       .then(() => {
-        if (this.destroyed || generation !== this.generation) return this.raw;
+        if (!this.enabled || generation !== this.generation) return this.raw;
         const next = RawGraph.build(this.app);
-        if (this.destroyed || generation !== this.generation) return this.raw;
+        if (!this.enabled || generation !== this.generation) return this.raw;
         this.raw = next;
         this.pendingStructural = false;
         if (emit) this.emit();
         return next;
       })
       .finally(() => {
-        this.buildPromise = null;
+        if (this.buildPromise === promise) this.buildPromise = null;
       });
-    return this.buildPromise;
+    this.buildPromise = promise;
+    return promise;
   }
 
   private emit(): void {
     const raw = this.raw;
-    if (!raw) return;
     for (const listener of this.listeners) listener(raw);
   }
 
@@ -144,6 +174,8 @@ export class VaultGraphSource {
     this.destroyed = true;
     this.generation++;
     this.cancelTimer();
+    this.raw = null;
+    this.buildPromise = null;
     this.listeners.clear();
   }
 }

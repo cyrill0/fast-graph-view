@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const pl = {
+  "settings.vaultAccess.name": "Zezwól na dostęp do metadanych całego skarbca",
+  "settings.vaultAccess.desc": "Wymagane dla grafów globalnych i lokalnych. Pozwala wyświetlić wszystkie ścieżki plików w skarbcu i odczytać buforowane łącza, tagi, rozmiary i daty. Treść notatek nie jest odczytywana, a dane nie są wysyłane. Domyślnie wyłączone; wyłączenie czyści otwarte grafy.",
   "settings.fold.name": "Zwijaj duże foldery",
   "settings.fold.desc": "Rysuj jeden węzeł metadanych dla folderu zamiast każdej notatki w nim.",
   "settings.threshold.name": "Liczba plików w folderze przed zwinięciem",
@@ -34,6 +36,7 @@ const pl = {
   "view.graph": "Widok grafu",
   "view.graphOfFile": "Graf pliku {name}",
   "view.localGraph": "Graf lokalny",
+  "view.vaultAccessRequired": "Dostęp do metadanych jest wyłączony. Aby utworzyć graf, włącz 'Zezwól na dostęp do metadanych całego skarbca' w Ustawienia → Fast Graph View.",
 
   "panel.filters": "Filtry",
   "panel.groups": "Grupy",
@@ -138,9 +141,7 @@ const pl = {
   "menu.openLinkedView": "Otwórz połączony widok",
   "menu.openInNewTab": "Otwórz w nowej karcie",
   "menu.deleteFile": "Usuń plik",
-  "menu.copyScreenshot": "Kopiuj zrzut ekranu",
-  "notice.clipboardUnsupported": "Kopiowanie obrazów do schowka nie jest tutaj obsługiwane.",
-  "notice.screenshotCopied": "Zrzut ekranu skopiowany do schowka.",
+  "menu.saveScreenshot": "Zapisz zrzut ekranu",
 
   "label.vaultRoot": "Korzeń sejfu",
   "label.clusterCount": "{name} ({count})",

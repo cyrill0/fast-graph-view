@@ -87,11 +87,14 @@ export const DEFAULT_CLUSTER_OPTIONS: ClusterOptions = {
 };
 
 export interface PluginData {
+  /** Explicit opt-in before collecting vault-wide file paths and cached metadata. */
+  allowVaultEnumeration: boolean;
   graph: GraphOptions;
   cluster: ClusterOptions;
 }
 
 export const DEFAULT_DATA: PluginData = {
+  allowVaultEnumeration: false,
   graph: { ...DEFAULT_GRAPH_OPTIONS },
   cluster: { ...DEFAULT_CLUSTER_OPTIONS },
 };
@@ -217,6 +220,7 @@ export function mergeData(saved: unknown): PluginData {
   const graph = cloneGraphOptions(DEFAULT_GRAPH_OPTIONS);
   if (!saved || typeof saved !== "object") {
     return {
+      allowVaultEnumeration: false,
       graph,
       cluster: { ...DEFAULT_CLUSTER_OPTIONS },
     };
@@ -224,6 +228,9 @@ export function mergeData(saved: unknown): PluginData {
   const raw = saved as Partial<PluginData>;
   applyNativeOptions(graph, raw.graph);
   return {
+    allowVaultEnumeration:
+      Object.prototype.hasOwnProperty.call(raw, "allowVaultEnumeration") &&
+      raw.allowVaultEnumeration === true,
     graph,
     cluster: sanitizeClusterOptions(raw.cluster),
   };

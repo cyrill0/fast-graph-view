@@ -90,6 +90,20 @@ the fixed root file are saved in the leaf state, so restored local panes return 
 note. The option names, ranges, and defaults intentionally remain familiar, but the plugin no
 longer reads or writes the built-in plugin's private configuration.
 
+## Privacy and data access
+
+- **Vault-wide metadata access is off by default**, including after upgrading from a version
+  without this setting. Enable **Allow vault-wide metadata access** in **Settings → Fast Graph
+  View** to use either graph. Building a complete graph requires enumerating all vault file
+  paths, including attachments, and inspecting cached links, tags, file sizes and timestamps.
+  This is intentional functionality, not a permission bypass; a static security scanner can
+  still report vault enumeration even though it is guarded by consent.
+- No note bodies are read to build the graph, and no vault data is sent over the network.
+  Automatic indexing runs only while a graph pane is open. Disabling access cancels pending
+  builds, drops the shared snapshot and clears open graphs.
+- The plugin does **not read or write the system clipboard**. **Save screenshot** downloads
+  a PNG only when selected from the graph pane menu; it does not create files in the vault.
+
 ## Interactions
 
 Wheel zoom anchors under the cursor, drag pans, drag on a node pins it for the duration of

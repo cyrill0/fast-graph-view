@@ -10,6 +10,8 @@ import type { PluralForms } from "./types";
 
 const en = {
   // ------------------------------------------------------------- settings tab
+  "settings.vaultAccess.name": "Allow vault-wide metadata access",
+  "settings.vaultAccess.desc": "Required for global and local graphs. Allows listing every vault file path and reading cached links, tags, sizes and dates. No note bodies are read or data sent. Off by default; disabling clears open graphs.",
   "settings.fold.name": "Fold up large folders",
   "settings.fold.desc": "Draw one metadata node for a folder instead of every note inside it.",
   "settings.threshold.name": "Files per folder before folding",
@@ -43,6 +45,7 @@ const en = {
   "view.graph": "Graph view",
   "view.graphOfFile": "Graph of {name}",
   "view.localGraph": "Local graph",
+  "view.vaultAccessRequired": "Vault metadata access is off. To build a graph, enable vault-wide metadata access in this plugin's settings.",
 
   // --------------------------------------------------------- control panel
   "panel.filters": "Filters",
@@ -121,9 +124,7 @@ const en = {
   "menu.openLinkedView": "Open linked view",
   "menu.openInNewTab": "Open in new tab",
   "menu.deleteFile": "Delete file",
-  "menu.copyScreenshot": "Copy screenshot",
-  "notice.clipboardUnsupported": "Copying images to the clipboard is not supported here.",
-  "notice.screenshotCopied": "Screenshot copied to the clipboard.",
+  "menu.saveScreenshot": "Save screenshot",
 
   // ------------------------------------------------------- canvas node labels
   "label.vaultRoot": "Vault root",

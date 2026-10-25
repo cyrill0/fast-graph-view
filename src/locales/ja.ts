@@ -2,6 +2,8 @@ import type { Messages } from "./en";
 
 /** Japanese has a single plural category, so `one` repeats `other` to satisfy the type. */
 const ja = {
+  "settings.vaultAccess.name": "保管庫全体のメタデータへのアクセスを許可",
+  "settings.vaultAccess.desc": "グローバルグラフとローカルグラフに必要です。保管庫内のすべてのファイルパスを列挙し、キャッシュ内のリンク、タグ、サイズ、日付を読み取ります。ノート本文の読み取りやデータの送信は行いません。初期設定は無効で、無効にすると開いているグラフは消去されます。",
   "settings.fold.name": "大きなフォルダを折りたたむ",
   "settings.fold.desc":
     "フォルダ内のすべてのノートの代わりに、1 つのメタデータノードを描画します。",
@@ -34,6 +36,7 @@ const ja = {
   "view.graph": "グラフビュー",
   "view.graphOfFile": "{name} のグラフ",
   "view.localGraph": "ローカルグラフ",
+  "view.vaultAccessRequired": "メタデータへのアクセスは無効です。グラフを作成するには、設定 → Fast Graph View で「保管庫全体のメタデータへのアクセスを許可」を有効にしてください。",
 
   "panel.filters": "フィルター",
   "panel.groups": "グループ",
@@ -108,9 +111,7 @@ const ja = {
   "menu.openLinkedView": "リンクされたビューを開く",
   "menu.openInNewTab": "新しいタブで開く",
   "menu.deleteFile": "ファイルを削除",
-  "menu.copyScreenshot": "スクリーンショットをコピー",
-  "notice.clipboardUnsupported": "ここでは画像をクリップボードにコピーできません。",
-  "notice.screenshotCopied": "スクリーンショットをクリップボードにコピーしました。",
+  "menu.saveScreenshot": "スクリーンショットを保存",
 
   "label.vaultRoot": "Vault のルート",
   "label.clusterCount": "{name} ({count})",

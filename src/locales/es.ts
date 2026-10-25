@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const es = {
+  "settings.vaultAccess.name": "Permitir el acceso a los metadatos de toda la bóveda",
+  "settings.vaultAccess.desc": "Necesario para los gráficos globales y locales. Permite listar todas las rutas de archivos de la bóveda y leer enlaces, etiquetas, tamaños y fechas en caché. No se lee el contenido de las notas ni se envían datos. Desactivado por defecto; al desactivarlo se vacían los gráficos abiertos.",
   "settings.fold.name": "Agrupar las carpetas grandes",
   "settings.fold.desc":
     "Dibuja un nodo de metadatos para una carpeta en lugar de cada nota dentro de ella.",
@@ -35,6 +37,7 @@ const es = {
   "view.graph": "Vista de gráfico",
   "view.graphOfFile": "Gráfico de {name}",
   "view.localGraph": "Gráfico local",
+  "view.vaultAccessRequired": "El acceso a los metadatos está desactivado. Para crear un gráfico, activa 'Permitir el acceso a los metadatos de toda la bóveda' en Ajustes → Fast Graph View.",
 
   "panel.filters": "Filtros",
   "panel.groups": "Grupos",
@@ -118,9 +121,7 @@ const es = {
   "menu.openLinkedView": "Abrir vista vinculada",
   "menu.openInNewTab": "Abrir en una pestaña nueva",
   "menu.deleteFile": "Eliminar archivo",
-  "menu.copyScreenshot": "Copiar captura de pantalla",
-  "notice.clipboardUnsupported": "Copiar imágenes al portapapeles no es compatible aquí.",
-  "notice.screenshotCopied": "Captura de pantalla copiada al portapapeles.",
+  "menu.saveScreenshot": "Guardar captura de pantalla",
 
   "label.vaultRoot": "Raíz de la bóveda",
   "label.clusterCount": "{name} ({count})",

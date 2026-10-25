@@ -1,6 +1,8 @@
 import type { Messages } from "./en";
 
 const ptBr = {
+  "settings.vaultAccess.name": "Permitir acesso aos metadados de todo o cofre",
+  "settings.vaultAccess.desc": "Necessário para grafos globais e locais. Permite listar todos os caminhos de arquivos do cofre e ler links, tags, tamanhos e datas em cache. O conteúdo das notas não é lido e nenhum dado é enviado. Desativado por padrão; desativar limpa os grafos abertos.",
   "settings.fold.name": "Agrupar pastas grandes",
   "settings.fold.desc": "Desenha um nó de metadados para uma pasta em vez de cada nota dentro dela.",
   "settings.threshold.name": "Arquivos por pasta antes de agrupar",
@@ -34,6 +36,7 @@ const ptBr = {
   "view.graph": "Visão de gráfico",
   "view.graphOfFile": "Gráfico de {name}",
   "view.localGraph": "Gráfico local",
+  "view.vaultAccessRequired": "O acesso aos metadados está desativado. Para criar um grafo, ative 'Permitir acesso aos metadados de todo o cofre' em Configurações → Fast Graph View.",
 
   "panel.filters": "Filtros",
   "panel.groups": "Grupos",
@@ -116,9 +119,7 @@ const ptBr = {
   "menu.openLinkedView": "Abrir visão vinculada",
   "menu.openInNewTab": "Abrir em nova aba",
   "menu.deleteFile": "Excluir arquivo",
-  "menu.copyScreenshot": "Copiar captura de tela",
-  "notice.clipboardUnsupported": "Copiar imagens para a área de transferência não é suportado aqui.",
-  "notice.screenshotCopied": "Captura de tela copiada para a área de transferência.",
+  "menu.saveScreenshot": "Salvar captura de tela",
 
   "label.vaultRoot": "Raiz do cofre",
   "label.clusterCount": "{name} ({count})",
