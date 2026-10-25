@@ -19,6 +19,7 @@ import {
   ItemView,
   Menu,
   Notice,
+  Platform,
   TFile,
   type App,
   type HoverParent,
@@ -99,9 +100,6 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.loaded = true;
     const stage = this.stageEl;
     stage.addClass("fast-graph-stage");
-    stage.style.padding = "0";
-    stage.style.overflow = "hidden";
-    stage.style.position = "relative";
     this.engine.attach();
     this.buildStatusLine();
     this.loadingEl = stage.createDiv({ cls: "fast-graph-loading" });
@@ -131,9 +129,6 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
     this.statusEl = null;
     this.stageEl.empty();
     this.stageEl.removeClass("fast-graph-stage");
-    this.stageEl.style.padding = "";
-    this.stageEl.style.overflow = "";
-    this.stageEl.style.position = "";
   }
 
   resize(): void {
@@ -155,7 +150,7 @@ export class GraphPresenter implements EngineHost, ControlsHost, HoverParent {
 
   /** A leaf state carried `options`; push them in without echoing a save. */
   applyStateOptions(partial: Partial<GraphOptions>): void {
-    applyNativeOptions(this.options, partial as Record<string, unknown>);
+    applyNativeOptions(this.options, partial);
     if (!this.loaded) return;
     this.controls.applyOptions(this.options);
     this.engine.setClusterOptions(this.init.deps.cluster);
@@ -449,7 +444,7 @@ export class FastGraphView extends ItemView {
     this.opened = true;
     this.presenter.load();
     this.registerEvent(this.app.workspace.on("css-change", () => this.presenter.cssChanged()));
-    requestAnimationFrame(() => this.presenter.resize());
+    window.requestAnimationFrame(() => this.presenter.resize());
   }
 
   async onClose(): Promise<void> {
@@ -543,7 +538,7 @@ export class FastLocalGraphView extends ItemView {
     this.presenter.load();
     this.registerEvent(this.app.workspace.on("css-change", () => this.presenter.cssChanged()));
     this.presenter.engine.setScope(this.rootFile?.path ?? null);
-    requestAnimationFrame(() => this.presenter.resize());
+    window.requestAnimationFrame(() => this.presenter.resize());
   }
 
   async onClose(): Promise<void> {
@@ -558,7 +553,7 @@ export class FastLocalGraphView extends ItemView {
   async setState(state: unknown, _result: ViewStateResult): Promise<void> {
     const st = (state ?? {}) as Record<string, unknown>;
     const options = st.options;
-    if (options && typeof options === "object") this.presenter.applyStateOptions(options as Partial<GraphOptions>);
+    if (options && typeof options === "object") this.presenter.applyStateOptions(options);
     const path = typeof st.file === "string" ? st.file : this.app.workspace.getActiveFile()?.path;
     const candidate = path ? this.app.vault.getAbstractFileByPath(path) : null;
     this.rootFile = candidate instanceof TFile ? candidate : null;
@@ -604,9 +599,8 @@ export function modEventPaneType(evt: MouseEvent): PaneType | boolean {
 }
 
 function isModKey(evt: MouseEvent): boolean {
-  const platform = navigator.platform || "";
-  if (/iPhone|iPad|iPod/.test(platform)) return evt.ctrlKey || evt.metaKey;
-  return /Mac/.test(platform) ? evt.metaKey : evt.ctrlKey;
+  if (Platform.isIosApp) return evt.ctrlKey || evt.metaKey;
+  return Platform.isMacOS ? evt.metaKey : evt.ctrlKey;
 }
 
 /** The pane menu's screenshot entry, in the section the core plugin puts it in. */

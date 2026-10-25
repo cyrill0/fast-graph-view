@@ -27,7 +27,7 @@ const en = {
   "settings.metadataLimit.desc": "Cap on the non-file nodes a graph may hold.",
   "settings.maxLabelChars.name": "Shorten long names",
   "settings.maxLabelChars.desc":
-    "Cut names to this many characters on the canvas and drop the path a broken link carries. 0 leaves them whole; the hovered node always shows the full name.",
+    "Cut names to this many characters on the canvas and drop the path a broken link carries. A limit of 0 leaves them whole; the hovered node always shows the full name.",
   "settings.showMetadata.name": "Show folder details on hover",
   "settings.showMetadata.desc":
     "Card with the note count, link weight and busiest notes of a folded folder.",
@@ -89,10 +89,10 @@ const en = {
   "panel.restoreDefaults": "Restore default settings",
 
   // -------------------------------------------------------- folder hover card
-  "card.reason.direct": "over the folder threshold",
-  "card.reason.entities": "over the folder threshold with its subfolders",
-  "card.reason.budget": "hidden by the node budget",
-  "card.reason.manual": "collapsed by hand",
+  "card.reason.direct": "Over the folder threshold",
+  "card.reason.entities": "Over the folder threshold with its subfolders",
+  "card.reason.budget": "Hidden by the node budget",
+  "card.reason.manual": "Collapsed by hand",
   "card.noteCount": { one: "{count} note", other: "{count} notes" } as PluralForms,
   "card.files.label": "Files",
   "card.files.value": "{here} here, {below} below",

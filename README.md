@@ -189,6 +189,15 @@ flatpak run md.obsidian.Obsidian \
   --disable-background-timer-throttling --disable-features=CalculateNativeWinOcclusion
 ```
 
+Bug fixes (1.0.0 -> 1.0.1): pnpm version patch
+
+New features (1.0.0 -> 1.1.0): pnpm version minor
+
+Breaking changes (1.0.0 -> 2.0.0): pnpm version major
+
+Then push the commit and the new tag to GitHub:
+git push && git push --tags
+
 ## License
 
-[MIT](LICENSE)
+This plugin is licensed under the **GNU General Public License v3.0 (GPLv3)** with an additional linking exception under Section 7 allowing it to be linked with and run inside the proprietary Obsidian application. See the [LICENSE](LICENSE) file for full details.

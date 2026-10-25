@@ -1,11 +1,12 @@
 import esbuild from 'esbuild';
 import fs from 'node:fs';
+import { builtinModules } from 'node:module';
 import path from 'node:path';
 import process from 'node:process';
-import builtins from 'builtin-modules';
 
 const prod = process.argv.includes('production');
 const watch = process.argv.includes('--watch');
+const nodeBuiltins = builtinModules.flatMap((name) => [name, `node:${name}`]);
 
 const common = {
   bundle: true,
@@ -54,7 +55,7 @@ async function main() {
   };
   const options = {
     ...common,
-    external: ['obsidian', 'electron', '@codemirror/*', '@lezer/*', ...builtins],
+    external: ['obsidian', 'electron', '@codemirror/*', '@lezer/*', ...nodeBuiltins],
     define: { 'process.env.NODE_ENV': prod ? '"production"' : '"development"' },
     platform: 'browser',
     format: 'cjs',

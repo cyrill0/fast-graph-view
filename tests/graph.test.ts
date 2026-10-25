@@ -93,10 +93,10 @@ function createLargeMockApp(count = 5_000): App {
   } as unknown as App;
 }
 
-describe('Settings & security sanitization', () => {
-  it('prevents prototype pollution and unknown keys in applyNativeOptions and mergeData', () => {
+void describe('Settings & security sanitization', () => {
+  void it('prevents prototype pollution and unknown keys in applyNativeOptions and mergeData', () => {
     const target = cloneGraphOptions(DEFAULT_GRAPH_OPTIONS);
-    const malicious = JSON.parse(
+    const malicious: unknown = JSON.parse(
       '{"__proto__":{"polluted":true},"constructor":{"prototype":{"polluted":true}},"unknownKey":"evil","nodeSizeMultiplier":999,"lineSizeMultiplier":-10,"scale":null}',
     );
     applyNativeOptions(target, malicious);
@@ -112,7 +112,7 @@ describe('Settings & security sanitization', () => {
     assert.equal(merged.cluster.threshold, DEFAULT_CLUSTER_OPTIONS.threshold);
   });
 
-  it('clamps cluster options and color groups safely', () => {
+  void it('clamps cluster options and color groups safely', () => {
     const cluster = sanitizeClusterOptions({
       threshold: -5,
       maxVisibleNodes: 999999,
@@ -143,8 +143,8 @@ describe('Settings & security sanitization', () => {
   });
 });
 
-describe('RawGraph indexing & query engine', () => {
-  it('indexes unresolved links with Object.prototype names and deduplicates per-file tags', () => {
+void describe('RawGraph indexing & query engine', () => {
+  void it('indexes unresolved links with Object.prototype names and deduplicates per-file tags', () => {
     const raw = RawGraph.build(createMockApp());
     assert.ok(raw.unresolvedNames.includes('constructor'));
     assert.ok(raw.unresolvedNames.includes('toString'));
@@ -157,7 +157,7 @@ describe('RawGraph indexing & query engine', () => {
     assert.equal(tagCount, 2);
   });
 
-  it('guards against deeply nested queries and trailing OR operators', () => {
+  void it('guards against deeply nested queries and trailing OR operators', () => {
     const raw = RawGraph.build(createMockApp());
     const back = BackIndex.for(raw);
 
@@ -181,25 +181,25 @@ describe('RawGraph indexing & query engine', () => {
   });
 });
 
-describe('Shared vault snapshot scheduling', () => {
-  it('drops a stale deferred build and emits the newer structural generation', async () => {
+void describe('Shared vault snapshot scheduling', () => {
+  void it('drops a stale deferred build and emits the newer structural generation', async () => {
     const originalWindow = globalThis.window;
-    const originalRaf = globalThis.requestAnimationFrame;
-    const nativeSetTimeout = globalThis.setTimeout;
+    const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
     const handlers: Record<string, () => void> = {};
     let destroyOwner = () => {};
 
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
       value: {
-        setTimeout: (fn: TimerHandler) => nativeSetTimeout(fn, 0) as unknown as number,
-        clearTimeout: (id: number) => globalThis.clearTimeout(id as unknown as NodeJS.Timeout),
+        requestAnimationFrame: (callback: FrameRequestCallback) => {
+          callback(0);
+          return 1;
+        },
+        setTimeout: (fn: TimerHandler) => nativeSetTimeout(fn, 0),
+        clearTimeout: (id: number) => nativeClearTimeout(id as unknown as ReturnType<typeof globalThis.setTimeout>),
       },
     });
-    globalThis.requestAnimationFrame = ((callback: FrameRequestCallback) => {
-      callback(0);
-      return 1;
-    }) as typeof requestAnimationFrame;
 
     try {
       const base = createMockApp() as unknown as {
@@ -211,7 +211,7 @@ describe('Shared vault snapshot scheduling', () => {
         return { name };
       };
       const app = {
-        vault: { getFiles: base.vault.getFiles, on },
+        vault: { getFiles: () => base.vault.getFiles(), on },
         metadataCache: { ...base.metadataCache, on },
       } as unknown as App;
       const owner = {
@@ -230,13 +230,12 @@ describe('Shared vault snapshot scheduling', () => {
     } finally {
       destroyOwner();
       Object.defineProperty(globalThis, 'window', { configurable: true, value: originalWindow });
-      globalThis.requestAnimationFrame = originalRaf;
     }
   });
 });
 
-describe('Graph builder & folder clustering', () => {
-  it('collapses large folders into cluster nodes and supports progressive reveal', () => {
+void describe('Graph builder & folder clustering', () => {
+  void it('collapses large folders into cluster nodes and supports progressive reveal', () => {
     const raw = RawGraph.build(createMockApp());
     const built = buildGraph(raw, {
       ...DEFAULT_BUILD_OPTIONS,
@@ -275,7 +274,7 @@ describe('Graph builder & folder clustering', () => {
     assert.equal(revealed.model.clusters[0].fileCount, 15);
   });
 
-  it('keeps a synthetic 5k-note mobile graph inside the emergency topology budget', () => {
+  void it('keeps a synthetic 5k-note mobile graph inside the emergency topology budget', () => {
     const started = performance.now();
     const raw = RawGraph.build(createLargeMockApp());
     const profile = mobileProfile('emergency');
@@ -291,8 +290,8 @@ describe('Graph builder & folder clustering', () => {
   });
 });
 
-describe('Physics simulation & spatial hash stability', () => {
-  it('handles 200 coincident nodes and oversized cluster radii without infinite loops or NaN', () => {
+void describe('Physics simulation & spatial hash stability', () => {
+  void it('handles 200 coincident nodes and oversized cluster radii without infinite loops or NaN', () => {
     const n = 200;
     const pos = new Float32Array(n * 2);
     const eu = new Int32Array(n - 1);
@@ -316,7 +315,7 @@ describe('Physics simulation & spatial hash stability', () => {
     assert.equal(sim.ticks, 10);
   });
 
-  it('keeps an oversized cluster from making the ordinary-node collision pass quadratic', () => {
+  void it('keeps an oversized cluster from making the ordinary-node collision pass quadratic', () => {
     const n = 3_000;
     const pos = new Float32Array(n * 2);
     const radius = new Float32Array(n).fill(12);
@@ -336,7 +335,7 @@ describe('Physics simulation & spatial hash stability', () => {
     for (const coordinate of sim.positions()) assert.ok(Number.isFinite(coordinate));
   });
 
-  it('still resolves collisions between two oversized clusters in distant grid cells', () => {
+  void it('still resolves collisions between two oversized clusters in distant grid cells', () => {
     const pos = new Float32Array([0, 0, 1_500, 0]);
     const radius = new Float32Array([1_000, 900]);
     const sim = new SimulationCore();
@@ -348,9 +347,11 @@ describe('Physics simulation & spatial hash stability', () => {
     assert.ok(out[2] > 1_500, 'second cluster should move away from the overlap');
   });
 
-  it('sends adaptive cadence and lifecycle state to the worker', () => {
+  void it('sends adaptive cadence and lifecycle state to the worker', () => {
     const originalWorker = globalThis.Worker;
     const originalWindow = globalThis.window;
+    const nativeSetTimeout = globalThis.setTimeout.bind(globalThis);
+    const nativeClearTimeout = globalThis.clearTimeout.bind(globalThis);
     const messages: unknown[] = [];
     class FakeWorker {
       onmessage: ((event: MessageEvent) => void) | null = null;
@@ -361,7 +362,10 @@ describe('Physics simulation & spatial hash stability', () => {
     Object.defineProperty(globalThis, 'Worker', { configurable: true, value: FakeWorker });
     Object.defineProperty(globalThis, 'window', {
       configurable: true,
-      value: { setTimeout: globalThis.setTimeout, clearTimeout: globalThis.clearTimeout },
+      value: {
+        setTimeout: nativeSetTimeout,
+        clearTimeout: nativeClearTimeout,
+      },
     });
     try {
       const driver = new SimulationDriver({ onFrame: () => {} });
@@ -383,8 +387,8 @@ describe('Physics simulation & spatial hash stability', () => {
   });
 });
 
-describe('Large desktop graph performance policy', () => {
-  it('keeps normal graphs at full quality and progressively bounds oversized graphs', () => {
+void describe('Large desktop graph performance policy', () => {
+  void it('keeps normal graphs at full quality and progressively bounds oversized graphs', () => {
     const normal = graphPerformanceProfile(2_000, 1_000);
     assert.equal(normal.simulationHz, 60);
     assert.equal(normal.publishHz, 60);
@@ -405,8 +409,8 @@ describe('Large desktop graph performance policy', () => {
   });
 });
 
-describe('Mobile adaptive performance policy', () => {
-  it('starts conservatively on low-memory, low-core, and high-fill devices', () => {
+void describe('Mobile adaptive performance policy', () => {
+  void it('starts conservatively on low-memory, low-core, and high-fill devices', () => {
     assert.equal(initialMobileTier({
       hardwareConcurrency: 8,
       deviceMemoryGb: 2,
@@ -427,7 +431,7 @@ describe('Mobile adaptive performance policy', () => {
     }), 'balanced');
   });
 
-  it('degrades quickly, recovers slowly, and uses a temporary interaction tier', () => {
+  void it('degrades quickly, recovers slowly, and uses a temporary interaction tier', () => {
     const quality = new MobileQualityController('balanced');
     assert.equal(quality.effective(false).tier, 'balanced');
     assert.equal(quality.effective(true).tier, 'low');

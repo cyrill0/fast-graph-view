@@ -19,17 +19,17 @@ type Dictionary = Record<string, string | PluralForms>;
 
 /** The shipped catalogues, read straight from the modules so test-only locales cannot leak in. */
 const SHIPPED: Record<string, Dictionary> = {
-  en: en as Dictionary,
-  de: de as Dictionary,
-  es: es as Dictionary,
-  fr: fr as Dictionary,
-  it: itCatalogue as Dictionary,
-  ja: ja as Dictionary,
-  ko: ko as Dictionary,
-  pl: pl as Dictionary,
-  'pt-br': ptBr as Dictionary,
-  ru: ru as Dictionary,
-  zh: zh as Dictionary,
+  en: en,
+  de: de,
+  es: es,
+  fr: fr,
+  it: itCatalogue,
+  ja: ja,
+  ko: ko,
+  pl: pl,
+  'pt-br': ptBr,
+  ru: ru,
+  zh: zh,
 };
 
 /**
@@ -86,8 +86,8 @@ function withLocale(code: string, run: () => void): void {
   }
 }
 
-describe('locale catalogues', () => {
-  it('carry exactly the English key set', () => {
+void describe('locale catalogues', () => {
+  void it('carry exactly the English key set', () => {
     const expected = Object.keys(en).sort();
     for (const [code, dictionary] of Object.entries(SHIPPED)) {
       const actual = Object.keys(dictionary).sort();
@@ -97,7 +97,7 @@ describe('locale catalogues', () => {
     }
   });
 
-  it('keep the same placeholders in every translation', () => {
+  void it('keep the same placeholders in every translation', () => {
     for (const [code, dictionary] of Object.entries(SHIPPED)) {
       for (const [key, expected] of Object.entries(en as Dictionary)) {
         assert.deepEqual(
@@ -109,7 +109,7 @@ describe('locale catalogues', () => {
     }
   });
 
-  it('do not leave whole catalogues untranslated', () => {
+  void it('do not leave whole catalogues untranslated', () => {
     for (const [code, dictionary] of Object.entries(SHIPPED)) {
       if (code === 'en') continue;
       const identical = Object.keys(en)
@@ -123,7 +123,7 @@ describe('locale catalogues', () => {
     }
   });
 
-  it('cover every plural category the locale can select', () => {
+  void it('cover every plural category the locale can select', () => {
     for (const [code, dictionary] of Object.entries(SHIPPED)) {
       const categories = new Intl.PluralRules(code).resolvedOptions().pluralCategories;
       assert.ok(categories.length > 0, `${code} reported no plural categories`);
@@ -132,7 +132,7 @@ describe('locale catalogues', () => {
         assert.equal(typeof entry, 'object', `${code} "${key}" is not a plural entry`);
         for (const category of categories) {
           assert.ok(
-            typeof (entry as PluralForms)[category as keyof PluralForms] === 'string',
+            typeof (entry as PluralForms)[category] === 'string',
             `${code} "${key}" has no "${category}" form`,
           );
         }
@@ -141,13 +141,13 @@ describe('locale catalogues', () => {
   });
 });
 
-describe('locale resolution', () => {
-  it('defaults to English before anything is configured', () => {
+void describe('locale resolution', () => {
+  void it('defaults to English before anything is configured', () => {
     assert.equal(getLocale(), 'en');
     assert.equal(t('panel.filters'), 'Filters');
   });
 
-  it('falls back from a region to its base language', () => {
+  void it('falls back from a region to its base language', () => {
     withLocale('de-AT', () => {
       assert.equal(getLocale(), 'de');
       assert.equal(t('panel.filters'), 'Filter');
@@ -158,13 +158,13 @@ describe('locale resolution', () => {
     });
   });
 
-  it('accepts the codes Obsidian reports, whatever their case or separator', () => {
+  void it('accepts the codes Obsidian reports, whatever their case or separator', () => {
     withLocale('pt-BR', () => assert.equal(t('panel.filters'), 'Filtros'));
     withLocale('pt_BR', () => assert.equal(t('panel.filters'), 'Filtros'));
     withLocale('zh', () => assert.equal(t('panel.filters'), '筛选'));
   });
 
-  it('does not hand Traditional Chinese readers the Simplified catalogue', () => {
+  void it('does not hand Traditional Chinese readers the Simplified catalogue', () => {
     for (const code of ['zh-TW', 'zh-HK', 'zh-Hant']) {
       withLocale(code, () => {
         assert.equal(getLocale(), 'en');
@@ -177,11 +177,11 @@ describe('locale resolution', () => {
     }
   });
 
-  it('serves European Portuguese English rather than Brazilian', () => {
+  void it('serves European Portuguese English rather than Brazilian', () => {
     withLocale('pt', () => assert.equal(t('panel.filters'), 'Filters'));
   });
 
-  it('falls back to English per key, not per dictionary', () => {
+  void it('falls back to English per key, not per dictionary', () => {
     registerLocale('test-partial', { 'label.vaultRoot': 'TEST ROOT' });
     withLocale('test-partial', () => {
       assert.equal(t('label.vaultRoot'), 'TEST ROOT');
@@ -189,7 +189,7 @@ describe('locale resolution', () => {
     });
   });
 
-  it('resolves an unknown language to English', () => {
+  void it('resolves an unknown language to English', () => {
     withLocale('xx-YY', () => {
       assert.equal(getLocale(), 'en');
       assert.equal(t('panel.filters'), 'Filters');
@@ -197,30 +197,30 @@ describe('locale resolution', () => {
   });
 });
 
-describe('messages', () => {
-  it('interpolates named variables and leaves unknown ones alone', () => {
+void describe('messages', () => {
+  void it('interpolates named variables and leaves unknown ones alone', () => {
     assert.equal(t('view.graphOfFile', { name: 'Daily' }), 'Graph of Daily');
     assert.equal(t('view.graphOfFile', { wrong: 'x' }), 'Graph of {name}');
   });
 
-  it('keeps the embedded newline in the colour-swatch tooltip', () => {
+  void it('keeps the embedded newline in the colour-swatch tooltip', () => {
     assert.equal(t('panel.swatchTooltip'), 'Click to change color\nDrag to reorder groups');
     withLocale('de', () => assert.ok(t('panel.swatchTooltip').includes('\n')));
   });
 
-  it('pluralises with English rules', () => {
+  void it('pluralises with English rules', () => {
     assert.equal(tp('status.nodes', 1), '1 node');
     assert.equal(tp('status.nodes', 0), '0 nodes');
     assert.equal(tp('status.nodes', 1546), '1,546 nodes');
     assert.equal(tp('card.noteCount', 1, { count: 'eine' }), 'eine note');
   });
 
-  it('picks the form the CLDR category asks for, not always "other"', () => {
+  void it('picks the form the CLDR category asks for, not always "other"', () => {
     // Ukrainian shares Russian's integer rules and is not a shipped catalogue, so
     // the synthetic dictionary below is the only source these lookups can hit.
     registerLocale('uk', {
       'status.nodes': { one: 'O{count}', few: 'F{count}', many: 'M{count}', other: 'X{count}' },
-    } as Partial<typeof en>);
+    });
     withLocale('uk', () => {
       assert.equal(tp('status.nodes', 1), 'O1');
       assert.equal(tp('status.nodes', 2), 'F2');
@@ -233,17 +233,17 @@ describe('messages', () => {
     });
   });
 
-  it('pluralises Russian and Polish with their own catalogues', () => {
+  void it('pluralises Russian and Polish with their own catalogues', () => {
     for (const code of ['ru', 'pl'] as const) {
       const rules = new Intl.PluralRules(code);
       const counts = [0, 1, 2, 4, 5, 11, 12, 21, 22, 25, 100];
       const seen = new Set(counts.map((n) => rules.select(n)));
       // without this the test below would pass on a catalogue of four equal strings
-      assert.ok(seen.size >= 3, `${code} only exercised ${[...seen].join('/')} over ${counts}`);
+      assert.ok(seen.size >= 3, `${code} only exercised ${[...seen].join('/')} over ${counts.join(', ')}`);
       const forms = SHIPPED[code]['status.links'] as PluralForms;
       withLocale(code, () => {
         for (const n of counts) {
-          const category = rules.select(n) as keyof PluralForms;
+          const category = rules.select(n);
           assert.equal(
             tp('status.links', n),
             forms[category]!.replace('{count}', formatInt(n)),
@@ -254,7 +254,7 @@ describe('messages', () => {
     }
   });
 
-  it('uses the single form for Japanese and Chinese', () => {
+  void it('uses the single form for Japanese and Chinese', () => {
     withLocale('ja', () => {
       assert.equal(tp('status.nodes', 1), '1 ノード');
       assert.equal(tp('status.nodes', 5), '5 ノード');
@@ -265,7 +265,7 @@ describe('messages', () => {
     });
   });
 
-  it('counts zero as singular in French, as CLDR requires', () => {
+  void it('counts zero as singular in French, as CLDR requires', () => {
     withLocale('fr', () => {
       assert.equal(tp('status.nodes', 0), '0 nœud');
       assert.equal(tp('status.nodes', 1), '1 nœud');
@@ -274,21 +274,21 @@ describe('messages', () => {
   });
 });
 
-describe('number formatting', () => {
-  it('groups with the locale separators', () => {
+void describe('number formatting', () => {
+  void it('groups with the locale separators', () => {
     withLocale('en', () => assert.equal(formatInt(1234567), '1,234,567'));
     withLocale('de', () => assert.equal(formatInt(1234567), '1.234.567'));
     withLocale('zh', () => assert.equal(formatInt(1234567), '1,234,567'));
   });
 
-  it('rounds counts before grouping them', () => {
+  void it('rounds counts before grouping them', () => {
     withLocale('en', () => {
       assert.equal(formatInt(1546.4), '1,546');
       assert.equal(formatInt(1546.6), '1,547');
     });
   });
 
-  it('formats fixed decimals with the locale separator', () => {
+  void it('formats fixed decimals with the locale separator', () => {
     withLocale('en', () => {
       assert.equal(formatFixed(0.43, 1), '0.4');
       assert.equal(formatFixed(42.2, 0), '42');
@@ -299,7 +299,7 @@ describe('number formatting', () => {
     });
   });
 
-  it('feeds the formatted number into plural messages', () => {
+  void it('feeds the formatted number into plural messages', () => {
     withLocale('de', () => assert.equal(tp('status.nodes', 1546), '1.546 Knoten'));
   });
 });

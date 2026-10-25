@@ -43,13 +43,17 @@ type WorkerIn =
   | { type: "run"; revision: number }
   | { type: "stop" };
 
-declare const self: Worker & { postMessage(message: unknown, transfer?: Transferable[]): void };
+declare const self: Worker & {
+  postMessage(message: unknown, transfer?: Transferable[]): void;
+  setInterval(handler: () => void, timeout?: number): number;
+  clearInterval(id?: number): void;
+};
 
 const core = new SimulationCore();
 let revision = -1;
 /** buffer handed back by the main thread and awaiting reuse */
 let spare: Float32Array | null = null;
-let timer: ReturnType<typeof setInterval> | null = null;
+let timer: ReturnType<typeof self.setInterval> | null = null;
 let simulationHz = 60;
 let publishHz = 60;
 let publishAccumulator = 0;
@@ -68,7 +72,7 @@ function publish(): void {
 
 function stop(): void {
   if (timer !== null) {
-    clearInterval(timer);
+    self.clearInterval(timer);
     timer = null;
   }
 }
@@ -77,7 +81,7 @@ function start(): void {
   stop();
   if (paused) return;
   publishAccumulator = 0;
-  timer = setInterval(() => {
+  timer = self.setInterval(() => {
     core.step();
     publishAccumulator += publishHz;
     if (publishAccumulator >= simulationHz || core.alpha <= ALPHA_MIN) {

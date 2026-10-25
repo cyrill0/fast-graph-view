@@ -65,6 +65,9 @@
 }
 
 .fast-graph-stage {
+  padding: 0;
+  overflow: hidden;
+  position: relative;
   cursor: default;
 }
 

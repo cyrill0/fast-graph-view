@@ -179,7 +179,7 @@ export class GraphEngine {
   /** Create the GL + label canvases. Must run once the stage has a size. */
   attach(): void {
     const stage = this.host.stageEl;
-    const gl = document.createElement("canvas");
+    const gl = createEl("canvas");
     gl.className = "graph-canvas fast-graph-gl";
     stage.appendChild(gl);
     gl.addEventListener("webglcontextlost", this.onContextLost);
@@ -503,7 +503,7 @@ export class GraphEngine {
     if (this.running || this.destroyed) return;
     this.running = true;
     this.lastFrameStarted = 0;
-    this.raf = requestAnimationFrame(this.frame);
+    this.raf = window.requestAnimationFrame(this.frame);
   }
 
   private frame = (): void => {
@@ -532,7 +532,7 @@ export class GraphEngine {
       this.host.onViewSettled(this.camera.zoom);
       return;
     }
-    this.raf = requestAnimationFrame(this.frame);
+    this.raf = window.requestAnimationFrame(this.frame);
   };
 
   /** True while any node is still easing toward its fade target. */
@@ -893,7 +893,7 @@ export class GraphEngine {
         this.pinch = this.measurePinch();
       } else {
         this.pinch = null;
-        const remaining = this.touchPoints.values().next().value as { x: number; y: number } | undefined;
+        const remaining = this.touchPoints.values().next().value;
         if (remaining) {
           // Continue naturally as a one-finger pan when one side of the pinch lifts.
           this.lastPanX = remaining.x;
@@ -936,8 +936,8 @@ export class GraphEngine {
 
   private measurePinch(): { distance: number; x: number; y: number } | null {
     const points = this.touchPoints.values();
-    const first = points.next().value as { x: number; y: number } | undefined;
-    const second = points.next().value as { x: number; y: number } | undefined;
+    const first = points.next().value;
+    const second = points.next().value;
     if (!first || !second) return null;
     return {
       distance: Math.max(1, Math.hypot(second.x - first.x, second.y - first.y)),
@@ -1038,7 +1038,7 @@ export class GraphEngine {
   /** Keys belong to the camera unless a field that consumes them has focus, or focus is outside this view. */
   private cameraKeys(el: Element | null): boolean {
     if (el === null || el === document.body) return true;
-    if (!(el instanceof HTMLElement)) return false;
+    if (!(el.instanceOf(HTMLElement))) return false;
     const tag = el.tagName;
     if (tag === "TEXTAREA" || tag === "SELECT" || el.isContentEditable) return false;
     if (tag === "INPUT" && TEXTUAL_INPUTS.has((el as HTMLInputElement).type)) return false;
@@ -1191,7 +1191,7 @@ export class GraphEngine {
   startTimelapse(): boolean {
     if (this.host.isLocal || !this.raw) return false;
     if (this.progressionTimer !== null) {
-      clearInterval(this.progressionTimer);
+      window.clearInterval(this.progressionTimer);
       this.progressionTimer = null;
     }
     const links = this.model ? this.model.edgeCount : this.raw.edgeCount;
@@ -1216,7 +1216,7 @@ export class GraphEngine {
 
   stopTimelapse(): void {
     if (this.progressionTimer !== null) {
-      clearInterval(this.progressionTimer);
+      window.clearInterval(this.progressionTimer);
       this.progressionTimer = null;
       this.progressionLimit = null;
       this.host.onStatus(null);
@@ -1265,7 +1265,7 @@ export class GraphEngine {
   destroy(): void {
     this.destroyed = true;
     if (this.raf) cancelAnimationFrame(this.raf);
-    if (this.rebuildTimer !== null) clearTimeout(this.rebuildTimer);
+    if (this.rebuildTimer !== null) window.clearTimeout(this.rebuildTimer);
     this.cancelTouchLongPress();
     this.stopTimelapse();
     this.unbindInput();
@@ -1312,7 +1312,7 @@ function clamp01(v: number): number {
 }
 
 function isMac(): boolean {
-  return /Mac|iP(hone|ad|od)/.test(navigator.platform || navigator.userAgent);
+  return Platform.isMacOS;
 }
 
 /** Clustering settings are builder inputs; the native option keys are not. */

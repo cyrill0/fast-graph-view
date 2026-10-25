@@ -175,7 +175,7 @@ export class RawGraph {
     const outW = new Float32Array(files.length);
     const inW = new Float32Array(files.length);
 
-    const resolved = cache.resolvedLinks as Record<string, Record<string, number>>;
+    const resolved = cache.resolvedLinks;
     for (const srcPath in resolved) {
       if (!Object.prototype.hasOwnProperty.call(resolved, srcPath)) continue;
       const s = pathIndex.get(srcPath);
@@ -197,7 +197,7 @@ export class RawGraph {
     }
 
     // ---- unresolved links ---------------------------------------------------
-    const unresolved = cache.unresolvedLinks as Record<string, Record<string, number>>;
+    const unresolved = cache.unresolvedLinks;
     const usArr: number[] = [];
     const utArr: number[] = [];
     const uwArr: number[] = [];
@@ -247,7 +247,7 @@ export class RawGraph {
           if (tag) rawTags.push(tag);
         }
       }
-      const fm = c.frontmatter as Record<string, unknown> | undefined;
+      const fm = c.frontmatter;
       if (fm) {
         pushTagValues(fm['tag'], rawTags);
         pushTagValues(fm['tags'], rawTags);

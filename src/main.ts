@@ -6,9 +6,9 @@ import {
   PluginSettingTab,
   Setting,
   TFile,
-  getLanguage,
   moment,
   type App,
+  type SettingDefinitionItem,
   type TAbstractFile,
 } from "obsidian";
 import { VaultGraphSource } from "./graph/source";
@@ -60,27 +60,17 @@ export default class FastGraphPlugin extends Plugin {
   }
 
   private buildDeps(): GraphViewDeps {
-    const self = this;
-    return {
-      get app(): App {
-        return self.app;
+    const deps = Object.defineProperties(
+      { saveGlobal: (options: GraphOptions): void => this.persistGraph(options) },
+      {
+        app: { enumerable: true, get: () => this.app },
+        source: { enumerable: true, get: () => this.source },
+        globalOptions: { enumerable: true, get: () => this.options },
+        cluster: { enumerable: true, get: () => this.settings.cluster },
+        hoverSource: { enumerable: true, get: () => GRAPH_VIEW_TYPE },
       },
-      get source(): VaultGraphSource {
-        return self.source;
-      },
-      get globalOptions(): GraphOptions {
-        return self.options;
-      },
-      get cluster(): ClusterOptions {
-        return self.settings.cluster;
-      },
-      get hoverSource(): string {
-        return GRAPH_VIEW_TYPE;
-      },
-      saveGlobal(options: GraphOptions): void {
-        self.persistGraph(options);
-      },
-    };
+    );
+    return deps as GraphViewDeps;
   }
 
   private addCommands(): void {
@@ -186,112 +176,117 @@ class FastGraphSettings extends PluginSettingTab {
     return this.plugin.settings.cluster;
   }
 
-  /**
-   * A row with its translated name and description, tagged with the catalogue key so the
-   * harness can find it without matching text that changes with the app language.
-   */
-  private option(key: SettingKey, descVars?: Record<string, string | number>): Setting {
-    const setting = new Setting(this.containerEl)
+  // Obsidian 1.13+ uses these for settings search. Older versions continue to
+  // render the compatible display() fallback below.
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    const keys: SettingKey[] = [
+      "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
+      "maxLabelChars", "showMetadata", "showStats",
+    ];
+    return keys.map((key) => ({
+      name: t(`settings.${key}.name`),
+      desc: t(`settings.${key}.desc`, this.descriptionVariables(key)),
+      render: (setting) => this.renderSetting(setting, key),
+    }));
+  }
+
+  private descriptionVariables(key: SettingKey): Record<string, string | number> | undefined {
+    if (key === "threshold") return { default: DEFAULT_CLUSTER_OPTIONS.threshold };
+    if (key === "nodeBudget") return { default: DEFAULT_CLUSTER_OPTIONS.maxVisibleNodes };
+    return undefined;
+  }
+
+  private renderSetting(setting: Setting, key: SettingKey): void {
+    setting
       .setName(t(`settings.${key}.name`))
-      .setDesc(t(`settings.${key}.desc`, descVars));
+      .setDesc(t(`settings.${key}.desc`, this.descriptionVariables(key)));
     setting.settingEl.dataset.fgvOption = key;
-    return setting;
+
+    switch (key) {
+      case "fold":
+        setting.addToggle((toggle) => toggle.setValue(this.cluster.enabled).onChange(async (value) => {
+          this.cluster.enabled = value;
+          await this.plugin.saveSettings();
+          this.plugin.applyClusterOptions();
+        }));
+        break;
+      case "threshold":
+        setting.addSlider((slider) => slider
+          .setLimits(1, 200, 1)
+          .setValue(this.cluster.threshold)
+          .setInstant(true)
+          .onChange(async (value) => {
+            this.cluster.threshold = value;
+            await this.plugin.saveSettings();
+            this.plugin.applyClusterOptions();
+          }));
+        break;
+      case "countNotes":
+        setting.addDropdown((dropdown) => dropdown
+          .addOption("direct", t("settings.mode.direct"))
+          .addOption("recursive", t("settings.mode.recursive"))
+          .setValue(this.cluster.mode)
+          .onChange(async (value) => {
+            this.cluster.mode = value as ClusterOptions["mode"];
+            await this.plugin.saveSettings();
+            this.plugin.applyClusterOptions();
+          }));
+        break;
+      case "nodeBudget":
+        this.numberSetting(setting, () => this.cluster.maxVisibleNodes, (value) => {
+          this.cluster.maxVisibleNodes = value;
+        }, 50);
+        break;
+      case "metadataLimit":
+        this.numberSetting(setting, () => this.cluster.maxMetadataNodes, (value) => {
+          this.cluster.maxMetadataNodes = value;
+        }, 0);
+        break;
+      case "maxLabelChars":
+        setting.addSlider((slider) => slider
+          .setLimits(0, 80, 2)
+          .setValue(this.cluster.maxLabelChars)
+          .setInstant(true)
+          .onChange(async (value) => {
+            this.cluster.maxLabelChars = value;
+            await this.plugin.saveSettings();
+            this.plugin.applyClusterOptions();
+          }));
+        break;
+      case "showMetadata":
+        setting.addToggle((toggle) => toggle.setValue(this.cluster.showMetadata).onChange(async (value) => {
+          this.cluster.showMetadata = value;
+          await this.plugin.saveSettings();
+          this.plugin.applyClusterOptions();
+        }));
+        break;
+      case "showStats":
+        setting.addToggle((toggle) => toggle.setValue(this.cluster.showStats).onChange(async (value) => {
+          this.cluster.showStats = value;
+          await this.plugin.saveSettings();
+          this.plugin.applyClusterOptions();
+        }));
+        break;
+    }
   }
 
   display(): void {
     this.containerEl.empty();
 
-    this.option("fold").addToggle((toggle) =>
-      toggle.setValue(this.cluster.enabled).onChange(async (value) => {
-        this.cluster.enabled = value;
-        await this.plugin.saveSettings();
-        this.plugin.applyClusterOptions();
-      }),
-    );
-
-    this.option("threshold", { default: DEFAULT_CLUSTER_OPTIONS.threshold }).addSlider((slider) =>
-      slider
-        .setLimits(1, 200, 1)
-        .setValue(this.cluster.threshold)
-        .setDynamicTooltip()
-        .setInstant(true)
-        .onChange(async (value) => {
-          this.cluster.threshold = value;
-          await this.plugin.saveSettings();
-          this.plugin.applyClusterOptions();
-        }),
-    );
-
-    this.option("countNotes").addDropdown((dropdown) =>
-      dropdown
-        .addOption("direct", t("settings.mode.direct"))
-        .addOption("recursive", t("settings.mode.recursive"))
-        .setValue(this.cluster.mode)
-        .onChange(async (value) => {
-          this.cluster.mode = value as ClusterOptions["mode"];
-          await this.plugin.saveSettings();
-          this.plugin.applyClusterOptions();
-        }),
-    );
-
-    this.numberSetting(
-      "nodeBudget",
-      { default: DEFAULT_CLUSTER_OPTIONS.maxVisibleNodes },
-      () => this.cluster.maxVisibleNodes,
-      (value) => {
-        this.cluster.maxVisibleNodes = value;
-      },
-      50,
-    );
-
-    this.numberSetting(
-      "metadataLimit",
-      undefined,
-      () => this.cluster.maxMetadataNodes,
-      (value) => {
-        this.cluster.maxMetadataNodes = value;
-      },
-      0,
-    );
-
-    this.option("maxLabelChars").addSlider((slider) =>
-      slider
-        .setLimits(0, 80, 2)
-        .setValue(this.cluster.maxLabelChars)
-        .setDynamicTooltip()
-        .setInstant(true)
-        .onChange(async (value) => {
-          this.cluster.maxLabelChars = value;
-          await this.plugin.saveSettings();
-          this.plugin.applyClusterOptions();
-        }),
-    );
-
-    this.option("showMetadata").addToggle((toggle) =>
-      toggle.setValue(this.cluster.showMetadata).onChange(async (value) => {
-        this.cluster.showMetadata = value;
-        await this.plugin.saveSettings();
-        this.plugin.applyClusterOptions();
-      }),
-    );
-
-    this.option("showStats").addToggle((toggle) =>
-      toggle.setValue(this.cluster.showStats).onChange(async (value) => {
-        this.cluster.showStats = value;
-        await this.plugin.saveSettings();
-        this.plugin.applyClusterOptions();
-      }),
-    );
+    const keys: SettingKey[] = [
+      "fold", "threshold", "countNotes", "nodeBudget", "metadataLimit",
+      "maxLabelChars", "showMetadata", "showStats",
+    ];
+    for (const key of keys) this.renderSetting(new Setting(this.containerEl), key);
   }
 
   private numberSetting(
-    key: SettingKey,
-    descVars: Record<string, string | number> | undefined,
+    setting: Setting,
     read: () => number,
     write: (value: number) => void,
     min: number,
   ): void {
-    this.option(key, descVars).addText((text) =>
+    setting.addText((text) =>
       text
         .setPlaceholder(String(read()))
         .setValue(String(read()))
@@ -306,12 +301,7 @@ class FastGraphSettings extends PluginSettingTab {
   }
 }
 
-/**
- * The language Obsidian itself is running in. `getLanguage()` only exists from
- * 1.8.7 and `manifest.json` still promises 1.7.0, so `moment.locale()` - which
- * the app keeps in step with the same setting - covers the older builds.
- */
+/** Obsidian keeps Moment's locale in sync with the language selected by the user. */
 function appLanguage(): string {
-  const code = typeof getLanguage === "function" ? getLanguage() : moment?.locale?.();
-  return code || "en";
+  return moment?.locale?.() || "en";
 }

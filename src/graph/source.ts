@@ -110,7 +110,7 @@ export class VaultGraphSource {
     this.buildPromise = new Promise<void>((resolve) => {
       // Two queues guarantee at least one browser paint before the synchronous
       // metadata-cache snapshot. This removes the expensive work from view-open.
-      requestAnimationFrame(() => window.setTimeout(resolve, 0));
+      window.requestAnimationFrame(() => window.setTimeout(resolve, 0));
     })
       .then(() => {
         if (this.destroyed || generation !== this.generation) return this.raw;
@@ -135,7 +135,7 @@ export class VaultGraphSource {
 
   private cancelTimer(): void {
     if (this.timer !== null) {
-      clearTimeout(this.timer);
+      window.clearTimeout(this.timer);
       this.timer = null;
     }
   }

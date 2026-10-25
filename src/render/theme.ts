@@ -53,7 +53,7 @@ export class ThemeReader {
   textCss = "rgba(136, 136, 136, 1)";
 
   constructor(host: Element) {
-    const probe = document.createElement("div");
+    const probe = createDiv();
     probe.className = "graph-view fast-graph-probe";
     probe.setAttribute("aria-hidden", "true");
     host.appendChild(probe);
@@ -81,7 +81,7 @@ export class ThemeReader {
   private getProbeChild(cls: string, parentStyle: CSSStyleDeclaration): { color: string; opacity: string } {
     let el = this.children.get(cls);
     if (!el || !el.isConnected) {
-      el = document.createElement("div");
+      el = createDiv();
       el.className = `graph-view ${cls}`;
       el.setAttribute("aria-hidden", "true");
       this.probe.appendChild(el);
@@ -104,7 +104,7 @@ function parseColor(color: string, opacity: string): Rgba | null {
   let a = 1;
   const rgb = color.match(/rgba?\(([^)]+)\)/i);
   if (rgb) {
-    const parts = rgb[1].split(/[\s,\/]+/).filter((s) => s.length > 0).map(Number);
+    const parts = rgb[1].split(/[\s,/]+/).filter((s) => s.length > 0).map(Number);
     if (parts.length < 3 || parts.some((v) => Number.isNaN(v))) return null;
     [r, g, b] = parts;
     if (parts.length > 3) a = parts[3];

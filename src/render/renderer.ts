@@ -146,7 +146,7 @@ export class GraphRenderer {
     };
     const gl =
       (canvas.getContext("webgl2", options) as WebGLRenderingContext | null) ||
-      (canvas.getContext("webgl", options) as WebGLRenderingContext | null);
+      (canvas.getContext("webgl", options));
     if (!gl) throw new Error("WebGL is not available");
     this.gl = gl;
     this.api = createDivisorApi(gl);
@@ -243,7 +243,7 @@ export class GraphRenderer {
    */
   snapshot(labels: HTMLCanvasElement | null): string {
     if (!labels) return this.canvas.toDataURL("image/png");
-    const out = document.createElement("canvas");
+    const out = createEl("canvas");
     out.width = this.canvas.width;
     out.height = this.canvas.height;
     const ctx = out.getContext("2d");
@@ -583,21 +583,21 @@ function bindAttrib(
 }
 
 function dynamic(gl: WebGLRenderingContext, floats: number): WebGLBuffer {
-  const b = gl.createBuffer() as WebGLBuffer;
+  const b = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, b);
   gl.bufferData(gl.ARRAY_BUFFER, floats * 4, gl.DYNAMIC_DRAW);
   return b;
 }
 
 function staticBuffer(gl: WebGLRenderingContext, data: Float32Array): WebGLBuffer {
-  const b = gl.createBuffer() as WebGLBuffer;
+  const b = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, b);
   gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
   return b;
 }
 
 function staticIndexBuffer(gl: WebGLRenderingContext, data: Uint16Array): WebGLBuffer {
-  const b = gl.createBuffer() as WebGLBuffer;
+  const b = gl.createBuffer();
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b);
   gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, data, gl.STATIC_DRAW);
   return b;

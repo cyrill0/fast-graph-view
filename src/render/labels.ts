@@ -46,7 +46,7 @@ export class LabelLayer {
   private shortCacheMax = -1;
 
   constructor(host: Element) {
-    const canvas = document.createElement("canvas");
+    const canvas = createEl("canvas");
     canvas.className = "graph-canvas fast-graph-labels";
     this.ctx = canvas.getContext("2d");
     host.appendChild(canvas);
