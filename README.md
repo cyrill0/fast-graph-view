@@ -1,50 +1,150 @@
 # Fast Graph View
 
-A standalone alternative to Obsidian's graph view, built to stay responsive in vaults
-where the built-in view drops to a slideshow. Its defining rule: **a folder holding more
-than a configurable number of files (default 20) is drawn as one metadata node instead of
-one node per note.** Everything else behaves the way the built-in graph view does — same
-filters, same forces, same colour groups, same right-click menus, same hover preview rules,
-familiar controls, its own saved configuration, and the same app language.
+A standalone alternative to Obsidian's graph view, built to stay responsive in vaults where the built-in view drops to a slideshow.
 
-For a user-focused walkthrough, see the [Fast Graph View user guide](docs/USER_GUIDE.md).
+Its defining rule: **a folder holding more than a configurable number of files (default 20) is drawn as one metadata node instead of one node per note.** Everything else behaves the way the built-in graph view does — same filters, same forces, same colour groups, same right-click menus, same hover preview rules, familiar controls, its own saved configuration, and the same app language.
 
-## Build and install
+Measured on a 27,266-note vault (desktop Obsidian 1.14.4):
+**1,546 drawn nodes · 4,795 links · 24 folder clusters holding 26,942 notes · model build 42 ms · one frame 0.4–0.5 ms.**
 
-```bash
-pnpm install
-pnpm build          # esbuild production bundle + tsc --noEmit
-pnpm test           # unit & security regression tests
+For a complete user-focused walkthrough, see the **[Fast Graph View User Guide](docs/USER_GUIDE.md)**.
+
+---
+
+## Table of contents
+
+- [Getting started](#getting-started)
+- [Folder aggregation](#folder-aggregation)
+- [Interactions and search](#interactions-and-search)
+- [Settings](#settings)
+- [Standalone Obsidian integration](#standalone-obsidian-integration)
+- [Privacy and data access](#privacy-and-data-access)
+- [Why it is fast](#why-it-is-fast)
+- [Design decisions](#design-decisions)
+- [Build, development, and release](#build-development-and-release)
+- [License](#license)
+
+---
+
+## Getting started
+
+### 1. Install the plugin
+
+Install **Fast Graph View** from **Settings → Community plugins**, or copy `main.js`, `styles.css`, and `manifest.json` from a release (or local build) into:
+
+```text
+<vault>/.obsidian/plugins/fast-graph-view/
 ```
 
-The plugin is the three files at the repository root: `main.js`, `styles.css`,
-`manifest.json`. Copy them to `<vault>/.obsidian/plugins/fast-graph-view/` and enable
-"Fast Graph View" in Settings → Community plugins. `pnpm watch` rebuilds on change.
+Then enable **Fast Graph View** under **Settings → Community plugins**.
 
-### Publish a GitHub release
+### 2. Enable vault metadata access
 
-Set the same stable version in `manifest.json` and `package.json`, and map that version
-directly to its minimum app-version string in `versions.json`. After committing those changes, push a matching tag
-such as `v1.2.3`. GitHub Actions checks the version metadata, builds the plugin, and creates
-a release with the three files Obsidian needs (`main.js`, `manifest.json`, and `styles.css`).
-Run `pnpm check:release` before tagging to check the metadata locally.
+Open **Settings → Fast Graph View** and turn on **Allow vault-wide metadata access**. Vault-wide enumeration is **off by default** (including after upgrades) until explicitly enabled.
 
-For a ready-to-run local vault, use the checked-in `test-vault`:
+### 3. Open a graph
 
-```bash
-pnpm install
-pnpm build
-pnpm deploy
-```
+- **Global graph**: click the **Open clustered graph** ribbon icon or run **Fast Graph View: Open clustered graph** from the command palette (`Ctrl`/`⌘`+`P`).
+- **Local graph**: open a note and run **Fast Graph View: Open clustered local graph**, or right-click a Markdown note and choose **Open clustered local graph** from the file menu.
+- **Timelapse**: run **Start graph timelapse animation** (or click **Animate** under **Display** in the graph control panel) to reveal the global graph progressively; press `Escape`, click **Stop**, or run **Stop graph timelapse animation** to halt it.
 
-Open `test-vault` in Obsidian, enable the plugin, and use the live development loop:
+---
 
-```bash
-pnpm dev:vault
-```
+## Folder aggregation
 
-Launch Obsidian with `--remote-debugging-port=9223` for automatic plugin reloads after
-each build. Set `OBSIDIAN_VAULT=/path/to/another/vault` to deploy to a different vault.
+Folders over the threshold collapse into a single node sized by what it stands for and labelled `<name> (<count>)`. Hovering a cluster node shows a summary card with rolled-up counts: files directly in the folder and in subfolders, incoming links, outgoing links, internal links not drawn, and total file size.
+
+- **Left-click** reveals a batch of that folder's notes (25 at a time) and reheats the layout; the graph leaf stays open.
+- **Right-click** folds the folder back up. It does not open the file menu — a cluster is not a file.
+- **Budget folding (`maxVisibleNodes`, default `2500`)**: acts as a hard ceiling. After the threshold rule runs, the heaviest remaining folders fold until the drawn node count fits, so a 100k-note vault still opens cleanly.
+- **Counting modes (`mode`)**: `direct` counts only files immediately inside the folder; `recursive` counts the entire subtree, which works better for deeply nested vaults.
+- **Metadata node cap (`maxMetadataNodes`, default `1200`)**: tag and unresolved-link nodes are capped separately, since in large vaults they are the other two ways a graph becomes unreadable.
+
+---
+
+## Interactions and search
+
+### Desktop controls
+
+| Action | Behaviour |
+| --- | --- |
+| **Mouse wheel** | Zooms anchored under the cursor |
+| **Drag empty canvas** | Pans the viewport |
+| **Drag a node** | Pins the node for the duration of the drag and releases it on `pointerup` so it rejoins the layout (matching native `forceNode` behaviour) |
+| **Hover a node** | Highlights connected neighbours and dims the rest of the graph |
+| **`Ctrl`/`⌘` + hover a note** | Opens Obsidian's page preview via the registered hover source (`defaultMod: true`) |
+| **Click a note** | Opens the note in the same leaf (with navigation history back to the graph) |
+| **`Ctrl`/`⌘`-click or middle-click a note** | Opens the note in a new tab |
+| **`Ctrl`/`⌘`+`Alt`-click a note** | Opens the note in a split pane |
+| **`Ctrl`/`⌘`+`Alt`+`Shift`-click a note** | Opens the note in a new window |
+| **Click a folder cluster** | Expands up to 25 notes from that folder into the graph |
+| **Right-click a folder cluster** | Folds expanded notes back into the cluster |
+| **Click a tag node** | Filters the current graph to that tag |
+| **Control panel** | Filters, colour groups (including drag-to-reorder), display options, and force sliders matching the built-in graph view |
+
+### Mobile controls and adaptive performance
+
+On Obsidian Mobile (Android, iPhone, and iPad):
+
+- **One-finger swipe** pans, **tap** opens a note or expands a folder cluster, **two-finger pinch** zooms, and **long-press** triggers the node's context action (or folds a cluster). Colour groups can also be reordered by touch.
+- **Adaptive frame-time budgeting**: the view starts with a performance profile chosen from the device's CPU, reported memory, screen size, and pixel density, then monitors actual frame cost. If a device falls behind, it progressively reduces labels, arrows, canvas resolution, physics frequency, and worker-to-screen updates. Quality restores only after a sustained stable period to prevent visible oscillation.
+- **Interaction & lifecycle handling**: active pan and pinch gestures temporarily switch to a lighter profile, with an emergency topology budget reserved as a final fallback. These adjustments apply only to the active mobile session and never overwrite saved desktop settings (folder folding remains enabled on mobile even if turned off in saved desktop settings).
+- **Deferred shared indexing**: initial vault indexing is shared across graph panes and deferred until the pane has painted its controls and loading indicator. Physics pauses while Obsidian is backgrounded and resumes on return; orientation changes and recoverable WebGL context loss rebuild the canvas automatically.
+
+### Search operators
+
+The filter box supports the native graph's query syntax plus `is:cluster` for folder nodes:
+
+- `"exact phrase"` — exact substring match
+- `tag:#name` or `#name` — notes with the given tag
+- `path:folder` or `folder:folder` — notes under a folder path
+- `file:name` or `name:name` — match file name
+- `ext:md` — match file extension
+- `link:target` or `to:target` — notes linking to `target`
+- `backlink:source` or `from:source` — notes linked from `source`
+- `is:orphan` — notes with no links
+- `is:cluster` — folded folder cluster nodes
+- `-term` — negate any term or operator
+
+---
+
+## Settings
+
+Configure clustering and rendering budgets in **Settings → Fast Graph View**:
+
+| Setting | Option key | Default | Description |
+| --- | --- | --- | --- |
+| **Allow vault-wide metadata access** | `allowVaultEnumeration` | `false` | Required opt-in before the plugin lists vault file paths or reads cached links, tags, sizes, and dates. |
+| **Fold up large folders** | `cluster.enabled` | `true` | Collapse folders above the file threshold into single metadata nodes. |
+| **Files per folder before folding** | `cluster.threshold` | `20` | Minimum number of notes in a folder before it collapses into a cluster node (`1`–`200` on the slider). |
+| **Count notes** | `cluster.mode` | `direct` | Count notes directly inside the folder (`direct`) or across its entire subtree (`recursive`). |
+| **Node budget** | `cluster.maxVisibleNodes` | `2500` | Hard ceiling on drawn nodes; the largest remaining folders fold until the graph fits. |
+| **Tag and unresolved link limit** | `cluster.maxMetadataNodes` | `1200` | Maximum number of non-file metadata nodes (tags and unresolved links) shown at once. |
+| **Shorten long names** | `cluster.maxLabelChars` | `24` | Truncate drawn canvas labels to this many characters (`0` disables truncation; hovered nodes always show their full name). |
+| **Show folder details on hover** | `cluster.showMetadata` | `true` | Display the summary card with note counts, link weights, and folder size when hovering a cluster. |
+| **Show node and frame counts** | `cluster.showStats` | `true` | Show the status line in the bottom corner with drawn node/link counts and build/draw timings. |
+
+---
+
+## Standalone Obsidian integration
+
+Fast Graph View registers its own `fast-graph-view` and `fast-localgraph` view types through Obsidian's public plugin API. It does not unregister, replace, or modify the built-in graph plugin.
+
+- The ribbon button and **Open clustered graph** command open the global view.
+- The **Open clustered local graph** command and Markdown file-menu entry open a local view rooted on the selected note.
+- Global graph and clustering options are saved in this plugin's `data.json`.
+- Local graph options and the fixed root file are saved in the workspace leaf state, so restored local panes return to the same note.
+- Option names, ranges, and defaults remain familiar, without reading or writing the built-in graph plugin's private configuration.
+
+---
+
+## Privacy and data access
+
+- **Vault-wide metadata access is off by default**, including after upgrading from a version without this setting. Enable **Allow vault-wide metadata access** in **Settings → Fast Graph View** to use either graph. Building a complete graph requires enumerating all vault file paths (including attachments) and inspecting cached links, tags, file sizes, and timestamps. This is intentional functionality, not a permission bypass; a static security scanner may still report vault enumeration even though it is guarded by explicit user consent.
+- **Metadata cache only**: no note bodies are read from disk to build the graph, and no vault data is ever sent over the network. Automatic indexing runs only while a graph pane is open. Disabling access cancels pending builds, drops the shared snapshot, and clears open graphs.
+- **No clipboard or vault writes**: the plugin does not read or write the system clipboard. Choosing **Save screenshot** from the graph pane menu downloads a PNG directly through the browser/window; it does not create files inside the vault.
+
+---
 
 ## Why it is fast
 
@@ -54,86 +154,9 @@ each build. Set `OBSIDIAN_VAULT=/path/to/another/vault` to deploy to a different
 | `src/graph/build.ts` | Produces a structure-of-arrays model (`Float32Array` positions, `Int32Array` kinds/paths, CSR adjacency). Nothing per-node is allocated while drawing. |
 | `src/layout/*` | Barnes-Hut force simulation running in a blob worker, with an inline time-sliced fallback when workers are unavailable. The main thread receives position buffers and never touches the quadtree. |
 | `src/render/renderer.ts` | One WebGL2 instanced draw call per primitive: SDF discs for nodes, segments for links, arrowheads, selection rings. Labels are a separate 2D overlay that only redraws when the visible set changes. |
-| `src/view/engine.ts` | The frame loop stops. Once the layout alpha is under `0.001` and 60 frames have painted nothing, `requestAnimationFrame` is unscheduled; the next wheel, pointer or filter event wakes it. Idle cost is zero, not 60 fps of nothing. |
+| `src/view/engine.ts` | The frame loop stops. Once the layout alpha is under `0.001` and 60 frames have painted nothing, `requestAnimationFrame` is unscheduled; the next wheel, pointer, or filter event wakes it. Idle cost is zero, not 60 fps of nothing. |
 
-Measured on a 27,266-note vault: **1,546 drawn nodes · 4,795 links · 24 folder clusters
-holding 26,942 notes, model build 42 ms, one frame 0.4–0.5 ms** (status line of the view,
-desktop Obsidian 1.14.4).
-
-## Folder aggregation
-
-Folders over the threshold collapse to a single node sized by what it stands for, labelled
-`<name> (<count>)`. Hovering one shows a card with the rolled-up numbers: files here and
-below, links in, links out, internal links that are not drawn, and total size.
-
-- **Left click** reveals a batch of that folder's notes (25 at a time) and re-heats the
-  layout; the graph leaf stays open.
-- **Right click** folds it back. It does not open the file menu — a cluster is not a file.
-- **Budget folding**: `maxVisibleNodes` (default 2,500) is a hard ceiling. After the
-  threshold rule, the heaviest remaining folders fold until the drawn node count fits, so a
-  100k-note vault still opens.
-- **Modes**: `direct` counts files immediately in the folder; `recursive` counts the whole
-  subtree, which is the better rule for deeply nested vaults.
-- Tag and unresolved nodes are capped separately (`maxMetadataNodes`, default 1,200) — in a
-  large vault those are the other two ways a graph becomes unreadable.
-
-## Standalone Obsidian integration
-
-Fast Graph View registers its own `fast-graph-view` and `fast-localgraph` view types through
-Obsidian's public plugin API. It does not unregister, replace, or modify the built-in graph
-plugin. The ribbon button and **Open clustered graph** command open the global view. The
-**Open clustered local graph** command and Markdown file-menu entry open a local view rooted
-on the selected note.
-
-Graph and clustering options are saved in this plugin's `data.json`. Local graph options and
-the fixed root file are saved in the leaf state, so restored local panes return to the same
-note. The option names, ranges, and defaults intentionally remain familiar, but the plugin no
-longer reads or writes the built-in plugin's private configuration.
-
-## Privacy and data access
-
-- **Vault-wide metadata access is off by default**, including after upgrading from a version
-  without this setting. Enable **Allow vault-wide metadata access** in **Settings → Fast Graph
-  View** to use either graph. Building a complete graph requires enumerating all vault file
-  paths, including attachments, and inspecting cached links, tags, file sizes and timestamps.
-  This is intentional functionality, not a permission bypass; a static security scanner can
-  still report vault enumeration even though it is guarded by consent.
-- No note bodies are read to build the graph, and no vault data is sent over the network.
-  Automatic indexing runs only while a graph pane is open. Disabling access cancels pending
-  builds, drops the shared snapshot and clears open graphs.
-- The plugin does **not read or write the system clipboard**. **Save screenshot** downloads
-  a PNG only when selected from the graph pane menu; it does not create files in the vault.
-
-## Interactions
-
-Wheel zoom anchors under the cursor, drag pans, drag on a node pins it for the duration of
-the drag and releases it on pointerup so it rejoins the layout — the same thing the built-in
-view does, verified against its `forceNode` messages — plain click on a note opens it in the
-same leaf with history that takes you back to the graph, `Ctrl`/`⌘`-click and middle-click
-open a new tab, `Ctrl`/`⌘`+`Alt` splits, `Ctrl`/`⌘`+`Alt`+`Shift` opens a new window, tag
-nodes filter the current graph to that tag, and the control panel — filter, colour groups,
-display, forces — matches the native one including drag-to-reorder groups. Hovering a note
-opens Obsidian's page preview through this plugin's registered hover source (`defaultMod`), so
-plain hover dims the rest of the graph and Mod-held hover previews.
-
-On Obsidian Mobile, a one-finger swipe pans, tapping a node opens it, a two-finger pinch zooms,
-and a long press performs the node's context action. Colour groups can also be reordered with
-touch. The view starts with a performance profile selected from the phone's available CPU,
-memory (when the WebView reports it), screen size and pixel density, then watches actual frame
-cost. If a low-end Android device or iPhone falls behind, it quickly reduces labels, arrows,
-canvas resolution, physics frequency and worker-to-screen updates. Quality comes back only
-after a longer stable period, preventing visible oscillation. Pan and pinch temporarily use an
-even cheaper profile, while an emergency topology budget is reserved as the final fallback.
-
-These reductions apply only to the open mobile view. They never overwrite desktop graph
-settings. Folder folding stays enabled on mobile even if disabled in the saved desktop settings.
-Initial vault indexing is shared by all graph panes and deferred until the pane has painted its
-controls and loading indicator. Physics pauses while Obsidian is in the background and resumes
-on return; orientation changes and recoverable WebGL context loss rebuild the canvas safely.
-
-Search supports the operators the native graph has: `"exact"`, `tag:`/`#`, `path:`/`folder:`,
-`file:`/`name:`, `ext:`, `link:`/`to:`, `backlink:`/`from:`, `is:orphan`, and `-` negation,
-plus `is:cluster` for this plugin's folder nodes.
+---
 
 ## Design decisions
 
@@ -183,18 +206,53 @@ Deliberate departures from the built-in view, and why:
 - Folders are the only aggregation. Tags and unresolved links are capped by count, not
   folded, because they have no natural hierarchy to fold along.
 
-## Development tools
+---
 
-`tools/` is a verification harness, not part of the plugin — it is not bundled.
-`tools/obs-cdp.mjs` drives the running Obsidian renderer over the DevTools protocol
-(`--remote-debugging-port=9223`) with trusted `Input` events, and `tools/harness/*.mjs`
-are the scenarios it runs: `trusted.mjs` (hover, click, right-click, wheel, pan, node drag,
-idle-loop, click navigation), `panel.mjs` (control panel), `local.mjs` (local graph),
-`standalone.mjs` (standalone registration and teardown), and `crash-watch.mjs` (renderer reload journaling).
+## Build, development, and release
 
-The instance has to be launched so that it keeps producing frames while another window is on
-top of it — otherwise Chromium stops its frame sink, `requestAnimationFrame` freezes, and
-every timing measurement in a scenario reads as starvation rather than as behaviour:
+### Prerequisites and scripts
+
+Requires **Node.js `>=22.0.0`** and **pnpm**.
+
+```bash
+pnpm install
+pnpm build          # esbuild production bundle + tsc --noEmit
+pnpm test           # unit & security regression tests
+pnpm lint           # ESLint check (including eslint-plugin-obsidianmd)
+pnpm check:release  # verify manifest.json, package.json, versions.json, and API rules
+```
+
+The built plugin consists of the three files at the repository root: `main.js`, `styles.css`, and `manifest.json`. `pnpm watch` rebuilds on change.
+
+### Local development vault
+
+For a ready-to-run local vault, use the checked-in `test-vault`:
+
+```bash
+pnpm install
+pnpm build
+pnpm deploy
+```
+
+Open `test-vault` in Obsidian, enable the plugin, and start the live development loop:
+
+```bash
+pnpm dev:vault
+```
+
+Launch Obsidian with `--remote-debugging-port=9223` for automatic plugin reloads after each build. Set `OBSIDIAN_VAULT=/path/to/another/vault` to deploy to a different vault.
+
+### Verification harness (`tools/`)
+
+`tools/` is a verification harness and is not bundled into the plugin. `tools/obs-cdp.mjs` drives a running Obsidian renderer over the Chrome DevTools Protocol (`--remote-debugging-port=9223`) with trusted `Input` events, and `tools/harness/*.mjs` contains the test scenarios:
+
+- `trusted.mjs` — hover, click, right-click, wheel, pan, node drag, idle-loop, click navigation
+- `panel.mjs` — control panel interactions
+- `local.mjs` — local graph behaviour
+- `standalone.mjs` — standalone registration and teardown
+- `crash-watch.mjs` — renderer reload journaling
+
+Launch Obsidian with background throttling disabled so Chromium keeps producing frames even when another window covers it (otherwise `requestAnimationFrame` pauses and timing measurements reflect frame-sink starvation):
 
 ```bash
 flatpak run md.obsidian.Obsidian \
@@ -203,14 +261,27 @@ flatpak run md.obsidian.Obsidian \
   --disable-background-timer-throttling --disable-features=CalculateNativeWinOcclusion
 ```
 
-Bug fixes (1.0.0 -> 1.0.1): pnpm version patch
+### Publish a GitHub release
 
-New features (1.0.0 -> 1.1.0): pnpm version minor
+Version bumps synchronize `package.json`, `manifest.json`, and `versions.json` via the `version` script in `package.json` (with `tag-version-prefix=""` in `.npmrc` so tags match Obsidian's `1.2.3` format):
 
-Breaking changes (1.0.0 -> 2.0.0): pnpm version major
+```bash
+pnpm version patch   # Bug fixes (e.g. 1.0.1 -> 1.0.2)
+pnpm version minor   # New features (e.g. 1.0.1 -> 1.1.0)
+pnpm version major   # Breaking changes (e.g. 1.0.1 -> 2.0.0)
+```
 
-Then push the commit and the new tag to GitHub:
+Verify the release metadata and built assets locally, push the commit and tag to GitHub, and publish the release with the three plugin files (`main.js`, `manifest.json`, and `styles.css`):
+
+```bash
+pnpm check:release
+pnpm build
+pnpm test
 git push && git push --tags
+gh release create <version> main.js manifest.json styles.css --title "<version>" --generate-notes
+```
+
+---
 
 ## License
 

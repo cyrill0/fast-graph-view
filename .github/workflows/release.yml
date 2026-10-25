@@ -2,10 +2,12 @@ name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags: ["[0-9]*", "v*"]
 
 permissions:
+  attestations: write
   contents: write
+  id-token: write
 
 jobs:
   release:
@@ -24,6 +26,12 @@ jobs:
       - run: pnpm build
       - run: pnpm test
       - run: node tools/check-release.mjs "$GITHUB_REF_NAME" --assets
+      - name: Attest release assets
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            main.js
+            styles.css
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

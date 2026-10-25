@@ -72,8 +72,8 @@ if (versions[manifest.version] !== manifest.minAppVersion) {
     `versions.json must contain ${manifest.version} with minAppVersion ${manifest.minAppVersion}`,
   );
 }
-if (tag && tag !== `v${manifest.version}`) {
-  throw new Error(`release tag ${tag} must match manifest version v${manifest.version}`);
+if (tag && tag !== manifest.version && tag !== `v${manifest.version}`) {
+  throw new Error(`release tag ${tag} must match manifest version ${manifest.version} (optionally prefixed with v)`);
 }
 
 const forbiddenPrivateApis = [
